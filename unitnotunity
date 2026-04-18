@@ -1,0 +1,1302 @@
+-- ╔══════════════════════════════════════════════════════════════════════╗
+-- ║         UNIT HUB  v5.3  —  Windows 11 Theme                        ║
+-- ║  Tabs: ESP · WORLD · PLAYER · UTILS · LOG                          ║
+-- ╚══════════════════════════════════════════════════════════════════════╝
+
+-- ── SERVICES ──────────────────────────────────────────────────────────
+local TS   = game:GetService("TweenService")
+local RS   = game:GetService("RunService")
+local PLR  = game:GetService("Players")
+local UIS  = game:GetService("UserInputService")
+local LP   = PLR.LocalPlayer
+local RS_S = game:GetService("ReplicatedStorage")
+
+-- ── CLEANUP ───────────────────────────────────────────────────────────
+pcall(function()
+    for _, v in ipairs(game:GetService("CoreGui"):GetChildren()) do
+        if v.Name:match("^UnitHub") then v:Destroy() end
+    end
+end)
+
+-- ================================================================
+--  CONSTANTS
+-- ================================================================
+local VERSION    = "5.3"
+local OWNER_NAME = "powenp99087"
+
+local function isOwner() return LP.Name == OWNER_NAME end
+
+-- ================================================================
+--  IMAGE-ENTITY ALERT LIST
+--  These entities are 2D billboard images (not 3D models) — they move
+--  silently and are easy to miss with regular ESP.
+--  When detected within a certain range, a full notification is fired.
+-- ================================================================
+local IMAGE_ENTITIES = {
+    -- name pattern (case-insensitive match)  →  display label + danger color
+    { pattern = "alex",        label = "ALEX",         color = Color3.fromRGB(220, 50,  50) },
+    { pattern = "angrymunci",  label = "ANGRY MUNCI",  color = Color3.fromRGB(255, 120,  0) },
+    { pattern = "munci",       label = "MUNCI",        color = Color3.fromRGB(255, 160, 30) },
+    { pattern = "angry munci", label = "ANGRY MUNCI",  color = Color3.fromRGB(255, 120,  0) },
+}
+-- Deduplicate alert fire (prevent spam)
+local imageEntityAlerted = {}   -- name → last alerted tick
+
+local function matchImageEntity(name)
+    local lower = name:lower():gsub("%s+","")
+    for _, e in ipairs(IMAGE_ENTITIES) do
+        local pat = e.pattern:gsub("%s+","")
+        if lower:match(pat) then return e end
+    end
+    return nil
+end
+
+-- ================================================================
+--  WIN11 PALETTE  (blue–purple gradient accent)
+-- ================================================================
+local W = {
+    bg          = Color3.fromRGB(20, 20, 28),
+    surface     = Color3.fromRGB(30, 30, 40),
+    surfaceUp   = Color3.fromRGB(38, 38, 52),
+    sep         = Color3.fromRGB(48, 48, 62),
+    -- Gradient: deep blue → rich purple
+    accent      = Color3.fromRGB(0,  110, 220),
+    accentHov   = Color3.fromRGB(30, 140, 245),
+    accentDim   = Color3.fromRGB(0,   70, 145),
+    accentPurp  = Color3.fromRGB(120,  50, 230),
+    txtPri      = Color3.fromRGB(230, 230, 240),
+    txtSec      = Color3.fromRGB(140, 140, 160),
+    txtHint     = Color3.fromRGB(80,   80, 100),
+    danger      = Color3.fromRGB(196,  43,  28),
+    success     = Color3.fromRGB(16,  140,  16),
+    warn        = Color3.fromRGB(200, 130,   0),
+    pillOff     = Color3.fromRGB(48,   48,  62),
+    gold        = Color3.fromRGB(255, 210,  60),
+    alertRed    = Color3.fromRGB(220,  30,  30),
+}
+
+-- ================================================================
+--  FLAGS
+-- ================================================================
+local F = {
+    EntityESP    = false,
+    EntityChams  = false,
+    NpcESP       = false,
+    PlayerESP    = false,
+    ScrapESP     = false,
+    CorpseESP    = false,
+    FullBright   = false,
+    NoFog        = false,
+    Noclip       = false,
+    AutoSafe     = false,
+    AntiAFK      = false,
+    ImageAlert   = true,    -- on by default — image-entity proximity alerts
+    SpeedMult    = 1,
+    SafeHP       = 30,
+    SafeCooldown = false,
+    OrigSpeed    = 16,
+}
+
+-- ================================================================
+--  HUB TAGGING  (tag for own session only — no detection scanning)
+-- ================================================================
+pcall(function()
+    for _, v in ipairs(RS_S:GetChildren()) do
+        if v.Name:match("^UH_v[45]_user_") then v:Destroy() end
+    end
+    local tag = Instance.new("StringValue")
+    tag.Name = "UH_v5_user_" .. LP.UserId
+    tag.Value = LP.Name .. "|" .. VERSION
+    tag.Parent = RS_S
+end)
+
+local function applyCharAttr(char)
+    pcall(function() if char then char:SetAttribute("UnitHubV5User", VERSION) end end)
+end
+LP.CharacterAdded:Connect(applyCharAttr)
+if LP.Character then applyCharAttr(LP.Character) end
+
+LP.AncestryChanged:Connect(function()
+    pcall(function()
+        local t = RS_S:FindFirstChild("UH_v5_user_"..LP.UserId)
+        if t then t:Destroy() end
+    end)
+end)
+
+-- ================================================================
+--  UTILITY
+-- ================================================================
+local function tw(obj, t, props)
+    TS:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+end
+local function getChar() return LP.Character end
+local function getHRP()  local c=getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum()  local c=getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function getCurrentMap()
+    local mf = workspace:FindFirstChild("MapFolder")
+    local mn = mf and mf:FindFirstChild("Main"); if not mn then return nil end
+    for _, ch in ipairs(mn:GetChildren()) do
+        if ch:IsA("Model") or ch:IsA("Folder") then return ch end
+    end
+end
+
+local function getSpawnParts()
+    local map = getCurrentMap(); if not map then return {} end
+    local sf = map:FindFirstChild("Spawns")
+    if not sf then
+        for _, d in ipairs(map:GetDescendants()) do
+            if (d:IsA("Folder") or d:IsA("Model")) and d.Name:lower()=="spawns" then sf=d; break end
+        end
+    end
+    if not sf then return {} end
+    local out = {}
+    for _, s in ipairs(sf:GetChildren()) do
+        if s:IsA("BasePart") or s:IsA("SpawnLocation") then table.insert(out, s) end
+    end
+    return out
+end
+
+local function doSafeTeleport()
+    local hrp = getHRP(); if not hrp then return false,"no HRP" end
+    local parts = getSpawnParts(); if #parts==0 then return false,"no spawn parts" end
+    local nearest, nd = nil, math.huge
+    for _, sp in ipairs(parts) do
+        local d = (hrp.Position-sp.Position).Magnitude
+        if d<nd then nd=d; nearest=sp end
+    end
+    if not nearest then return false,"no nearest" end
+    local wa = hrp.Anchored; hrp.Anchored = true
+    hrp.CFrame = nearest.CFrame + Vector3.new(0,5,0)
+    task.wait(0.1); hrp.Anchored = wa
+    return true,"ok"
+end
+
+-- Speed application helper — always reads current F values
+-- FIX v5.3: speed is now applied via a dedicated enforcer loop instead of
+-- only on slider change.  The enforcer runs every 0.5s and clamps WalkSpeed
+-- back to the intended value if the game resets it (e.g. on round restart,
+-- after teleport, or after a server-side anti-cheat correction).
+local function applySpeed()
+    local h = getHum()
+    if h then h.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+end
+
+-- ================================================================
+--  SCREEN GUI
+-- ================================================================
+local SG = Instance.new("ScreenGui")
+SG.Name="UnitHubV5"; SG.Parent=game:GetService("CoreGui")
+SG.ResetOnSpawn=false; SG.IgnoreGuiInset=true; SG.DisplayOrder=999
+
+-- ================================================================
+--  MAIN FRAME  520 × 560
+-- ================================================================
+local Main = Instance.new("Frame",SG)
+Main.Name="Main"; Main.Size=UDim2.new(0,520,0,560)
+Main.Position=UDim2.new(0.5,-260,0.5,-280)
+Main.BackgroundColor3=W.bg; Main.BorderSizePixel=0
+Main.Active=true; Main.Draggable=true; Main.ClipsDescendants=true
+Instance.new("UICorner",Main).CornerRadius=UDim.new(0,12)
+local MainStroke=Instance.new("UIStroke",Main)
+MainStroke.Color=Color3.fromRGB(60,60,80); MainStroke.Thickness=1
+
+-- Mica tint overlay
+local Mica=Instance.new("Frame",Main)
+Mica.Size=UDim2.new(1,0,0.4,0); Mica.BackgroundColor3=Color3.fromRGB(30,25,55)
+Mica.BackgroundTransparency=0.8; Mica.BorderSizePixel=0; Mica.ZIndex=0
+Instance.new("UICorner",Mica).CornerRadius=UDim.new(0,12)
+
+-- Animated top accent bar — blue → purple gradient
+local TopBar=Instance.new("Frame",Main)
+TopBar.Size=UDim2.new(1,0,0,3); TopBar.BorderSizePixel=0
+TopBar.BackgroundColor3=W.accent
+local TG=Instance.new("UIGradient",TopBar)
+TG.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0,   Color3.fromRGB(0,   80, 255)),
+    ColorSequenceKeypoint.new(0.25, Color3.fromRGB(0,  150, 255)),
+    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(90,  40, 220)),
+    ColorSequenceKeypoint.new(0.8,  Color3.fromRGB(150, 20, 200)),
+    ColorSequenceKeypoint.new(1,   Color3.fromRGB(0,   80, 255)),
+}
+task.spawn(function()
+    local r=0
+    while true do r=(r+0.28)%360; TG.Rotation=r; task.wait(0.03) end
+end)
+
+-- ── TITLE BAR  h=50 ───────────────────────────────────────────
+local TitleBar=Instance.new("Frame",Main)
+TitleBar.Size=UDim2.new(1,0,0,50); TitleBar.Position=UDim2.new(0,0,0,3)
+TitleBar.BackgroundColor3=Color3.fromRGB(22,20,34); TitleBar.BorderSizePixel=0; TitleBar.ZIndex=2
+local TBC=Instance.new("UICorner",TitleBar); TBC.CornerRadius=UDim.new(0,12)
+local TBMask=Instance.new("Frame",TitleBar)
+TBMask.Size=UDim2.new(1,0,0,12); TBMask.Position=UDim2.new(0,0,1,-12)
+TBMask.BackgroundColor3=Color3.fromRGB(22,20,34); TBMask.BorderSizePixel=0
+
+-- App icon (blue→purple gradient)
+local AppIcon=Instance.new("Frame",TitleBar)
+AppIcon.Size=UDim2.new(0,28,0,28); AppIcon.Position=UDim2.new(0,14,0.5,-14)
+AppIcon.BackgroundColor3=W.accent; AppIcon.BorderSizePixel=0; AppIcon.ZIndex=3
+Instance.new("UICorner",AppIcon).CornerRadius=UDim.new(0,6)
+local AIGrad=Instance.new("UIGradient",AppIcon)
+AIGrad.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0, W.accent),
+    ColorSequenceKeypoint.new(1, W.accentPurp),
+}
+AIGrad.Rotation=135
+local AIL=Instance.new("TextLabel",AppIcon)
+AIL.Size=UDim2.new(1,0,1,0); AIL.BackgroundTransparency=1
+AIL.Text="UH"; AIL.TextColor3=Color3.new(1,1,1); AIL.Font=Enum.Font.GothamBlack; AIL.TextSize=11; AIL.ZIndex=4
+
+if isOwner() then
+    local crownL=Instance.new("TextLabel",AppIcon)
+    crownL.Size=UDim2.new(0,12,0,12); crownL.Position=UDim2.new(1,-8,0,-8)
+    crownL.BackgroundTransparency=1; crownL.Text="👑"; crownL.TextSize=9; crownL.ZIndex=5
+end
+
+local TitleL=Instance.new("TextLabel",TitleBar)
+TitleL.Size=UDim2.new(0,160,0,20); TitleL.Position=UDim2.new(0,50,0,8)
+TitleL.BackgroundTransparency=1; TitleL.Text="Unit Hub"
+TitleL.TextColor3=W.txtPri; TitleL.Font=Enum.Font.GothamSemibold
+TitleL.TextSize=14; TitleL.TextXAlignment=Enum.TextXAlignment.Left; TitleL.ZIndex=3
+
+local VerChip=Instance.new("Frame",TitleBar)
+VerChip.Size=UDim2.new(0,44,0,17); VerChip.Position=UDim2.new(0,120,0,9)
+VerChip.BackgroundColor3=W.surfaceUp; VerChip.BorderSizePixel=0; VerChip.ZIndex=3
+Instance.new("UICorner",VerChip).CornerRadius=UDim.new(0,4)
+local VCL=Instance.new("TextLabel",VerChip)
+VCL.Size=UDim2.new(1,0,1,0); VCL.BackgroundTransparency=1; VCL.Text="v"..VERSION
+VCL.TextColor3=W.txtSec; VCL.Font=Enum.Font.Gotham; VCL.TextSize=10; VCL.ZIndex=4
+
+if isOwner() then
+    local ownerChip=Instance.new("Frame",TitleBar)
+    ownerChip.Size=UDim2.new(0,66,0,17); ownerChip.Position=UDim2.new(0,170,0,9)
+    ownerChip.BackgroundColor3=Color3.fromRGB(80,55,0); ownerChip.BorderSizePixel=0; ownerChip.ZIndex=3
+    ownerChip.BackgroundTransparency=0.5
+    Instance.new("UICorner",ownerChip).CornerRadius=UDim.new(0,4)
+    local ocl=Instance.new("TextLabel",ownerChip)
+    ocl.Size=UDim2.new(1,0,1,0); ocl.BackgroundTransparency=1; ocl.Text="👑 OWNER"
+    ocl.TextColor3=W.gold; ocl.Font=Enum.Font.GothamBold; ocl.TextSize=9; ocl.ZIndex=4
+end
+
+-- Status chip
+local StatusChip=Instance.new("Frame",TitleBar)
+StatusChip.Size=UDim2.new(0,70,0,20); StatusChip.Position=UDim2.new(1,-176,0.5,-10)
+StatusChip.BackgroundColor3=Color3.fromRGB(14,36,14); StatusChip.BorderSizePixel=0; StatusChip.ZIndex=3
+Instance.new("UICorner",StatusChip).CornerRadius=UDim.new(0,4)
+local SCD=Instance.new("Frame",StatusChip)
+SCD.Size=UDim2.new(0,6,0,6); SCD.Position=UDim2.new(0,7,0.5,-3)
+SCD.BackgroundColor3=Color3.fromRGB(20,210,20); SCD.BorderSizePixel=0; SCD.ZIndex=4
+Instance.new("UICorner",SCD).CornerRadius=UDim.new(1,0)
+local SCL=Instance.new("TextLabel",StatusChip)
+SCL.Size=UDim2.new(1,-18,1,0); SCL.Position=UDim2.new(0,17,0,0)
+SCL.BackgroundTransparency=1; SCL.Text="Active"
+SCL.TextColor3=Color3.fromRGB(20,210,20); SCL.Font=Enum.Font.GothamSemibold; SCL.TextSize=10; SCL.ZIndex=4
+
+-- HP label + bar
+local HPLbl=Instance.new("TextLabel",TitleBar)
+HPLbl.Size=UDim2.new(0,96,0,13); HPLbl.Position=UDim2.new(1,-108,0,8)
+HPLbl.BackgroundTransparency=1; HPLbl.Text="HP  —"
+HPLbl.TextColor3=W.txtHint; HPLbl.Font=Enum.Font.Gotham
+HPLbl.TextSize=9; HPLbl.TextXAlignment=Enum.TextXAlignment.Left; HPLbl.ZIndex=3
+
+local HPTrack=Instance.new("Frame",TitleBar)
+HPTrack.Size=UDim2.new(0,96,0,4); HPTrack.Position=UDim2.new(1,-108,0,26)
+HPTrack.BackgroundColor3=W.sep; HPTrack.BorderSizePixel=0; HPTrack.ZIndex=3
+Instance.new("UICorner",HPTrack).CornerRadius=UDim.new(1,0)
+local HPFill=Instance.new("Frame",HPTrack)
+HPFill.Size=UDim2.new(1,0,1,0); HPFill.BorderSizePixel=0; HPFill.BackgroundColor3=W.success; HPFill.ZIndex=4
+Instance.new("UICorner",HPFill).CornerRadius=UDim.new(1,0)
+
+local TBSep=Instance.new("Frame",Main)
+TBSep.Size=UDim2.new(1,0,0,1); TBSep.Position=UDim2.new(0,0,0,53)
+TBSep.BackgroundColor3=W.sep; TBSep.BorderSizePixel=0
+
+-- ================================================================
+--  IMAGE-ENTITY ALERT BANNER
+--  A persistent banner that slides in at the TOP of the screen
+--  (outside the hub frame, so it shows even when hub is hidden).
+--  Red/orange background, bold entity name, distance, and a pulsing
+--  warning border.
+-- ================================================================
+local AlertBanner=Instance.new("Frame",SG)
+AlertBanner.Size=UDim2.new(0,340,0,56); AlertBanner.Position=UDim2.new(0.5,-170,-0.2,0)
+AlertBanner.BackgroundColor3=Color3.fromRGB(100,10,10); AlertBanner.BorderSizePixel=0
+AlertBanner.ClipsDescendants=true; AlertBanner.ZIndex=100
+AlertBanner.Visible=false
+Instance.new("UICorner",AlertBanner).CornerRadius=UDim.new(0,10)
+local AlertStroke=Instance.new("UIStroke",AlertBanner)
+AlertStroke.Color=Color3.fromRGB(220,30,30); AlertStroke.Thickness=1.8
+
+local AlertIcon=Instance.new("TextLabel",AlertBanner)
+AlertIcon.Size=UDim2.new(0,40,1,0); AlertIcon.Position=UDim2.new(0,0,0,0)
+AlertIcon.BackgroundTransparency=1; AlertIcon.Text="⚠"
+AlertIcon.TextColor3=Color3.new(1,1,1); AlertIcon.Font=Enum.Font.GothamBlack
+AlertIcon.TextSize=22; AlertIcon.ZIndex=101
+
+local AlertTitle=Instance.new("TextLabel",AlertBanner)
+AlertTitle.Size=UDim2.new(1,-50,0,22); AlertTitle.Position=UDim2.new(0,42,0,6)
+AlertTitle.BackgroundTransparency=1; AlertTitle.Text="ALEX NEARBY"
+AlertTitle.TextColor3=Color3.new(1,1,1); AlertTitle.Font=Enum.Font.GothamBlack
+AlertTitle.TextSize=14; AlertTitle.TextXAlignment=Enum.TextXAlignment.Left; AlertTitle.ZIndex=101
+
+local AlertSub=Instance.new("TextLabel",AlertBanner)
+AlertSub.Size=UDim2.new(1,-50,0,16); AlertSub.Position=UDim2.new(0,42,0,31)
+AlertSub.BackgroundTransparency=1; AlertSub.Text="Image entity · 00 studs away"
+AlertSub.TextColor3=Color3.fromRGB(255,180,180); AlertSub.Font=Enum.Font.GothamSemibold
+AlertSub.TextSize=10; AlertSub.TextXAlignment=Enum.TextXAlignment.Left; AlertSub.ZIndex=101
+
+-- Gradient fill behind alert
+local AlertGrad=Instance.new("UIGradient",AlertBanner)
+AlertGrad.Color=ColorSequence.new{
+    ColorSequenceKeypoint.new(0,   Color3.fromRGB(140,10,10)),
+    ColorSequenceKeypoint.new(1,   Color3.fromRGB(80, 8,  8)),
+}
+AlertGrad.Rotation=90
+
+local alertActive=false
+local alertHideTask=nil
+
+local function showAlert(label, dist, color)
+    AlertBanner.BackgroundColor3 = Color3.fromRGB(
+        math.floor(color.R*255*0.55), math.floor(color.G*255*0.25), math.floor(color.B*255*0.25)
+    )
+    AlertStroke.Color = color
+    AlertGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(
+            math.min(255, math.floor(color.R*255*0.7)),
+            math.min(255, math.floor(color.G*255*0.35)),
+            math.min(255, math.floor(color.B*255*0.35))
+        )),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(
+            math.min(255, math.floor(color.R*255*0.4)),
+            math.min(255, math.floor(color.G*255*0.2)),
+            math.min(255, math.floor(color.B*255*0.2))
+        )),
+    }
+    AlertTitle.Text = "⚠  " .. label .. " NEARBY"
+    AlertTitle.TextColor3 = color
+    AlertSub.Text = "Image entity  ·  " .. math.floor(dist) .. " studs away"
+
+    if not alertActive then
+        alertActive = true
+        AlertBanner.Visible = true
+        tw(AlertBanner, 0.22, {Position=UDim2.new(0.5,-170,0,14)})
+    end
+
+    -- pulse the stroke
+    task.spawn(function()
+        for _ = 1, 3 do
+            tw(AlertStroke, 0.18, {Transparency=0.7})
+            task.wait(0.22)
+            tw(AlertStroke, 0.18, {Transparency=0})
+            task.wait(0.22)
+        end
+    end)
+
+    if alertHideTask then task.cancel(alertHideTask) end
+    alertHideTask = task.delay(5, function()
+        tw(AlertBanner, 0.22, {Position=UDim2.new(0.5,-170,-0.2,0)})
+        task.wait(0.28)
+        AlertBanner.Visible = false
+        alertActive = false
+        alertHideTask = nil
+    end)
+end
+
+-- ── NOTIFICATION STRIP ────────────────────────────────────────
+local NotifStrip=Instance.new("Frame",Main)
+NotifStrip.Size=UDim2.new(1,0,0,0); NotifStrip.Position=UDim2.new(0,0,0,54)
+NotifStrip.BackgroundColor3=Color3.fromRGB(0,55,110); NotifStrip.BorderSizePixel=0
+NotifStrip.ClipsDescendants=true; NotifStrip.ZIndex=8
+local NotifTxt=Instance.new("TextLabel",NotifStrip)
+NotifTxt.Size=UDim2.new(1,-14,1,0); NotifTxt.Position=UDim2.new(0,8,0,0)
+NotifTxt.BackgroundTransparency=1; NotifTxt.Text=""
+NotifTxt.TextColor3=Color3.fromRGB(200,228,255); NotifTxt.Font=Enum.Font.GothamSemibold
+NotifTxt.TextSize=11; NotifTxt.TextXAlignment=Enum.TextXAlignment.Left; NotifTxt.ZIndex=9
+
+local notifQ={}; local notifBusy=false
+local function notify(msg, color)
+    table.insert(notifQ,{msg=msg, col=color or Color3.fromRGB(200,228,255)})
+    if notifBusy then return end
+    notifBusy=true
+    task.spawn(function()
+        while #notifQ>0 do
+            local n=table.remove(notifQ,1)
+            NotifTxt.Text="  "..n.msg; NotifTxt.TextColor3=n.col
+            NotifStrip.BackgroundColor3 =
+                n.col==W.danger  and Color3.fromRGB(70,10,10) or
+                n.col==W.success and Color3.fromRGB(8,36,8)   or
+                Color3.fromRGB(0,50,100)
+            tw(NotifStrip,0.14,{Size=UDim2.new(1,0,0,22)})
+            task.wait(2.8)
+            tw(NotifStrip,0.14,{Size=UDim2.new(1,0,0,0)})
+            task.wait(0.18)
+        end
+        notifBusy=false
+    end)
+end
+
+-- ── TAB BAR  h=38 ────────────────────────────────────────────
+local TabBar=Instance.new("Frame",Main)
+TabBar.Size=UDim2.new(1,0,0,38); TabBar.Position=UDim2.new(0,0,0,54)
+TabBar.BackgroundColor3=W.bg; TabBar.BorderSizePixel=0; TabBar.ZIndex=2
+do
+    local ll=Instance.new("UIListLayout",TabBar)
+    ll.FillDirection=Enum.FillDirection.Horizontal
+    ll.VerticalAlignment=Enum.VerticalAlignment.Center
+    ll.Padding=UDim.new(0,0)
+    local pp=Instance.new("UIPadding",TabBar)
+    pp.PaddingLeft=UDim.new(0,10); pp.PaddingRight=UDim.new(0,10)
+end
+
+local TabSep=Instance.new("Frame",Main)
+TabSep.Size=UDim2.new(1,0,0,1); TabSep.Position=UDim2.new(0,0,0,92)
+TabSep.BackgroundColor3=W.sep; TabSep.BorderSizePixel=0
+
+local CA=Instance.new("Frame",Main)
+CA.Size=UDim2.new(1,0,1,-94); CA.Position=UDim2.new(0,0,0,94)
+CA.BackgroundTransparency=1; CA.BorderSizePixel=0; CA.ClipsDescendants=true
+
+-- ================================================================
+--  TAB SYSTEM
+-- ================================================================
+local tabs={}; local activeN=nil
+
+local TDEFS={
+    {n="ESP",    w=62},
+    {n="WORLD",  w=62},
+    {n="PLAYER", w=68},
+    {n="UTILS",  w=62},
+    {n="LOG",    w=56},
+}
+
+local function newPage()
+    local sf=Instance.new("ScrollingFrame",CA)
+    sf.Size=UDim2.new(1,0,1,0); sf.BackgroundTransparency=1
+    sf.BorderSizePixel=0; sf.ScrollBarThickness=3
+    sf.ScrollBarImageColor3=W.accent
+    sf.CanvasSize=UDim2.new(0,0,0,0); sf.AutomaticCanvasSize=Enum.AutomaticSize.Y
+    sf.Visible=false
+    local pad=Instance.new("UIPadding",sf)
+    pad.PaddingLeft=UDim.new(0,12); pad.PaddingRight=UDim.new(0,12)
+    pad.PaddingTop=UDim.new(0,10); pad.PaddingBottom=UDim.new(0,12)
+    local ll=Instance.new("UIListLayout",sf)
+    ll.Padding=UDim.new(0,8); ll.HorizontalAlignment=Enum.HorizontalAlignment.Center
+    ll.SortOrder=Enum.SortOrder.LayoutOrder
+    return sf
+end
+
+local function switchTab(name)
+    if activeN==name then return end
+    activeN=name
+    for _,t in ipairs(tabs) do
+        local on=t.n==name
+        t.page.Visible=on
+        tw(t.btn,0.12,{TextColor3=on and W.txtPri or W.txtHint})
+        tw(t.ind,0.12,{BackgroundTransparency=on and 0 or 1})
+    end
+end
+
+for _,d in ipairs(TDEFS) do
+    local page=newPage()
+    local btn=Instance.new("TextButton",TabBar)
+    btn.Size=UDim2.new(0,d.w,0,36); btn.BackgroundTransparency=1
+    btn.BackgroundColor3=W.bg; btn.BorderSizePixel=0
+    btn.Text=d.n; btn.TextColor3=W.txtHint
+    btn.Font=Enum.Font.GothamSemibold; btn.TextSize=11; btn.AutoButtonColor=false; btn.ZIndex=3
+    local ind=Instance.new("Frame",btn)
+    ind.Size=UDim2.new(0.7,0,0,2); ind.Position=UDim2.new(0.15,0,1,-2)
+    ind.BackgroundColor3=W.accent; ind.BorderSizePixel=0; ind.BackgroundTransparency=1; ind.ZIndex=4
+    -- gradient underline: blue→purple
+    local indGrad=Instance.new("UIGradient",ind)
+    indGrad.Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0, W.accent),
+        ColorSequenceKeypoint.new(1, W.accentPurp),
+    }
+    Instance.new("UICorner",ind).CornerRadius=UDim.new(1,0)
+    btn.MouseEnter:Connect(function() if activeN~=d.n then tw(btn,0.1,{TextColor3=W.txtSec}) end end)
+    btn.MouseLeave:Connect(function() if activeN~=d.n then tw(btn,0.1,{TextColor3=W.txtHint}) end end)
+    table.insert(tabs,{n=d.n,btn=btn,page=page,ind=ind})
+    btn.MouseButton1Click:Connect(function() switchTab(d.n) end)
+end
+switchTab("ESP")
+
+-- ================================================================
+--  WIDGET BUILDERS
+-- ================================================================
+local function getPage(n)
+    for _,t in ipairs(tabs) do if t.n==n then return t.page end end
+end
+
+local function sec(page,text)
+    local f=Instance.new("Frame",page)
+    f.Size=UDim2.new(1,0,0,24); f.BackgroundTransparency=1; f.BorderSizePixel=0
+    local acc=Instance.new("Frame",f)
+    acc.Size=UDim2.new(0,3,0,14); acc.Position=UDim2.new(0,0,0.5,-7)
+    acc.BackgroundColor3=W.accent; acc.BorderSizePixel=0
+    Instance.new("UICorner",acc).CornerRadius=UDim.new(1,0)
+    -- accent bar gradient
+    local ag=Instance.new("UIGradient",acc)
+    ag.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
+    ag.Rotation=90
+    local lbl=Instance.new("TextLabel",f)
+    lbl.Size=UDim2.new(0,200,1,0); lbl.Position=UDim2.new(0,10,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=text
+    lbl.TextColor3=W.accent; lbl.Font=Enum.Font.GothamBold; lbl.TextSize=10
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local line=Instance.new("Frame",f)
+    line.Size=UDim2.new(1,-#text*7-18,0,1); line.Position=UDim2.new(0,#text*7+16,0.5,0)
+    line.BackgroundColor3=W.sep; line.BorderSizePixel=0
+end
+
+local function tog(page,label,desc,cb,broken)
+    local row=Instance.new("Frame",page)
+    row.Size=UDim2.new(1,0,0,56); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+    local rs=Instance.new("UIStroke",row); rs.Color=W.sep; rs.Thickness=1
+    local hov=Instance.new("Frame",row); hov.Size=UDim2.new(1,0,1,0)
+    hov.BackgroundTransparency=1; hov.BorderSizePixel=0; hov.ZIndex=1
+    Instance.new("UICorner",hov).CornerRadius=UDim.new(0,8)
+
+    local ll=Instance.new("TextLabel",row)
+    ll.Size=UDim2.new(1,-72,0,22); ll.Position=UDim2.new(0,14,0,9)
+    ll.BackgroundTransparency=1; ll.Text=label
+    ll.TextColor3=broken and W.warn or W.txtPri
+    ll.Font=Enum.Font.GothamSemibold; ll.TextSize=13; ll.TextXAlignment=Enum.TextXAlignment.Left; ll.ZIndex=2
+
+    local dl=Instance.new("TextLabel",row)
+    dl.Size=UDim2.new(1,-72,0,15); dl.Position=UDim2.new(0,14,0,33)
+    dl.BackgroundTransparency=1; dl.Text=desc
+    dl.TextColor3=broken and W.warn or W.txtHint
+    dl.Font=Enum.Font.Gotham; dl.TextSize=10; dl.TextXAlignment=Enum.TextXAlignment.Left; dl.ZIndex=2
+
+    local track=Instance.new("Frame",row)
+    track.Size=UDim2.new(0,40,0,22); track.Position=UDim2.new(1,-52,0.5,-11)
+    track.BackgroundColor3=W.pillOff; track.BorderSizePixel=0; track.ZIndex=3
+    Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
+    local trkS=Instance.new("UIStroke",track); trkS.Color=Color3.fromRGB(90,90,110); trkS.Thickness=1.2
+
+    local thumb=Instance.new("Frame",track)
+    thumb.Size=UDim2.new(0,16,0,16); thumb.Position=UDim2.new(0,3,0.5,-8)
+    thumb.BackgroundColor3=Color3.fromRGB(180,180,200); thumb.BorderSizePixel=0; thumb.ZIndex=4
+    Instance.new("UICorner",thumb).CornerRadius=UDim.new(1,0)
+
+    local active=false
+    local function setState(v)
+        active=v
+        if v then
+            tw(track,0.18,{BackgroundColor3=W.accent}); tw(trkS,0.18,{Color=W.accentHov})
+            tw(thumb,0.18,{Position=UDim2.new(0,21,0.5,-8),BackgroundColor3=Color3.new(1,1,1)})
+            tw(rs,0.18,{Color=W.accent}); tw(row,0.18,{BackgroundColor3=Color3.fromRGB(14,18,40)})
+        else
+            tw(track,0.18,{BackgroundColor3=W.pillOff}); tw(trkS,0.18,{Color=Color3.fromRGB(90,90,110)})
+            tw(thumb,0.18,{Position=UDim2.new(0,3,0.5,-8),BackgroundColor3=Color3.fromRGB(180,180,200)})
+            tw(rs,0.18,{Color=W.sep}); tw(row,0.18,{BackgroundColor3=W.surface})
+        end
+    end
+
+    local hb=Instance.new("TextButton",row)
+    hb.Size=UDim2.new(1,0,1,0); hb.BackgroundTransparency=1; hb.Text=""; hb.ZIndex=10
+    hb.MouseEnter:Connect(function() tw(hov,0.1,{BackgroundTransparency=0.93,BackgroundColor3=Color3.new(1,1,1)}) end)
+    hb.MouseLeave:Connect(function() tw(hov,0.1,{BackgroundTransparency=1}) end)
+    hb.MouseButton1Click:Connect(function() setState(not active); cb(active) end)
+    return setState
+end
+
+local function sld(page,label,desc,minV,maxV,def,cb)
+    local row=Instance.new("Frame",page)
+    row.Size=UDim2.new(1,0,0,64); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+    Instance.new("UIStroke",row).Color=W.sep
+
+    local ll=Instance.new("TextLabel",row)
+    ll.Size=UDim2.new(0.62,0,0,20); ll.Position=UDim2.new(0,14,0,8)
+    ll.BackgroundTransparency=1; ll.Text=label
+    ll.TextColor3=W.txtPri; ll.Font=Enum.Font.GothamSemibold; ll.TextSize=13
+    ll.TextXAlignment=Enum.TextXAlignment.Left
+
+    local vl=Instance.new("TextLabel",row)
+    vl.Size=UDim2.new(0.34,0,0,20); vl.Position=UDim2.new(0.64,0,0,8)
+    vl.BackgroundTransparency=1; vl.Text=tostring(def)
+    vl.TextColor3=W.accent; vl.Font=Enum.Font.GothamBold; vl.TextSize=13
+    vl.TextXAlignment=Enum.TextXAlignment.Right
+
+    if desc~="" then
+        local dl=Instance.new("TextLabel",row)
+        dl.Size=UDim2.new(1,-28,0,13); dl.Position=UDim2.new(0,14,0,28)
+        dl.BackgroundTransparency=1; dl.Text=desc
+        dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=10
+        dl.TextXAlignment=Enum.TextXAlignment.Left
+    end
+
+    local trk=Instance.new("Frame",row)
+    trk.Size=UDim2.new(1,-28,0,4); trk.Position=UDim2.new(0,14,1,-16)
+    trk.BackgroundColor3=W.sep; trk.BorderSizePixel=0
+    Instance.new("UICorner",trk).CornerRadius=UDim.new(1,0)
+
+    local fill=Instance.new("Frame",trk)
+    fill.Size=UDim2.new((def-minV)/(maxV-minV),0,1,0)
+    fill.BackgroundColor3=W.accent; fill.BorderSizePixel=0
+    Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
+    local fillGrad=Instance.new("UIGradient",fill)
+    fillGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
+
+    local dot=Instance.new("Frame",trk)
+    dot.Size=UDim2.new(0,14,0,14); dot.AnchorPoint=Vector2.new(0.5,0.5)
+    dot.Position=UDim2.new((def-minV)/(maxV-minV),0,0.5,0)
+    dot.BackgroundColor3=Color3.new(1,1,1); dot.BorderSizePixel=0; dot.ZIndex=3
+    Instance.new("UICorner",dot).CornerRadius=UDim.new(1,0)
+    local dotS=Instance.new("UIStroke",dot); dotS.Color=W.accent; dotS.Thickness=2
+
+    local dragging=false
+    local hb=Instance.new("TextButton",trk)
+    hb.Size=UDim2.new(1,0,0,28); hb.Position=UDim2.new(0,0,0.5,-14)
+    hb.BackgroundTransparency=1; hb.Text=""; hb.ZIndex=10
+    local function upd(mx)
+        local t=math.clamp((mx-trk.AbsolutePosition.X)/trk.AbsoluteSize.X,0,1)
+        local v=math.floor(minV+t*(maxV-minV))
+        fill.Size=UDim2.new(t,0,1,0); dot.Position=UDim2.new(t,0,0.5,0)
+        vl.Text=tostring(v); cb(v)
+    end
+    hb.MouseButton1Down:Connect(function() dragging=true; tw(dot,0.1,{Size=UDim2.new(0,18,0,18)}) end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then
+            dragging=false; tw(dot,0.1,{Size=UDim2.new(0,14,0,14)})
+        end
+    end)
+    RS.Heartbeat:Connect(function() if dragging then upd(UIS:GetMouseLocation().X) end end)
+    hb.MouseButton1Click:Connect(function() upd(UIS:GetMouseLocation().X) end)
+end
+
+local function inf(page,label)
+    local row=Instance.new("Frame",page)
+    row.Size=UDim2.new(1,0,0,38); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+    Instance.new("UIStroke",row).Color=W.sep
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(0.52,0,1,0); lbl.Position=UDim2.new(0,14,0,0)
+    lbl.BackgroundTransparency=1; lbl.Text=label
+    lbl.TextColor3=W.txtHint; lbl.Font=Enum.Font.Gotham; lbl.TextSize=12
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local vl=Instance.new("TextLabel",row)
+    vl.Size=UDim2.new(0.44,0,1,0); vl.Position=UDim2.new(0.52,0,0,0)
+    vl.BackgroundTransparency=1; vl.Text="—"
+    vl.TextColor3=W.txtPri; vl.Font=Enum.Font.GothamSemibold; vl.TextSize=12
+    vl.TextXAlignment=Enum.TextXAlignment.Right
+    return vl
+end
+
+local function actbtn(page,label,desc,btnTxt,color,cb)
+    local row=Instance.new("Frame",page)
+    row.Size=UDim2.new(1,0,0,52); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
+    Instance.new("UIStroke",row).Color=W.sep
+    local ll=Instance.new("TextLabel",row)
+    ll.Size=UDim2.new(1,-108,0,22); ll.Position=UDim2.new(0,14,0,8)
+    ll.BackgroundTransparency=1; ll.Text=label
+    ll.TextColor3=W.txtPri; ll.Font=Enum.Font.GothamSemibold; ll.TextSize=13
+    ll.TextXAlignment=Enum.TextXAlignment.Left
+    if desc~="" then
+        local dl=Instance.new("TextLabel",row)
+        dl.Size=UDim2.new(1,-108,0,13); dl.Position=UDim2.new(0,14,0,30)
+        dl.BackgroundTransparency=1; dl.Text=desc
+        dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=10
+        dl.TextXAlignment=Enum.TextXAlignment.Left
+    end
+    local c=color or W.accent
+    local cD=Color3.fromRGB(math.max(0,c.R*255-30),math.max(0,c.G*255-30),math.max(0,c.B*255-30))
+    local ab=Instance.new("TextButton",row)
+    ab.Size=UDim2.new(0,88,0,30); ab.Position=UDim2.new(1,-100,0.5,-15)
+    ab.BackgroundColor3=c; ab.Text=btnTxt; ab.TextColor3=Color3.new(1,1,1)
+    ab.Font=Enum.Font.GothamBold; ab.TextSize=11; ab.BorderSizePixel=0; ab.AutoButtonColor=false; ab.ZIndex=3
+    Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
+    ab.MouseEnter:Connect(function() tw(ab,0.1,{BackgroundColor3=Color3.fromRGB(math.min(255,c.R*255+18),math.min(255,c.G*255+18),math.min(255,c.B*255+18))}) end)
+    ab.MouseLeave:Connect(function() tw(ab,0.1,{BackgroundColor3=c}) end)
+    ab.MouseButton1Click:Connect(function()
+        tw(ab,0.07,{BackgroundColor3=cD})
+        task.delay(0.18,function() tw(ab,0.12,{BackgroundColor3=c}) end)
+        cb()
+    end)
+end
+
+local function changeEntry(page,ver,date,entries)
+    local H=40+#entries*20+8
+    local box=Instance.new("Frame",page)
+    box.Size=UDim2.new(1,0,0,H); box.BackgroundColor3=W.surface; box.BorderSizePixel=0
+    Instance.new("UICorner",box).CornerRadius=UDim.new(0,8)
+    Instance.new("UIStroke",box).Color=W.sep
+    local vb=Instance.new("Frame",box)
+    vb.Size=UDim2.new(0,50,0,20); vb.Position=UDim2.new(0,12,0,11)
+    vb.BackgroundColor3=W.accent; vb.BorderSizePixel=0
+    Instance.new("UICorner",vb).CornerRadius=UDim.new(0,4)
+    local vbG=Instance.new("UIGradient",vb)
+    vbG.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
+    local vl=Instance.new("TextLabel",vb)
+    vl.Size=UDim2.new(1,0,1,0); vl.BackgroundTransparency=1; vl.Text=ver
+    vl.TextColor3=Color3.new(1,1,1); vl.Font=Enum.Font.GothamBlack; vl.TextSize=11
+    local dl=Instance.new("TextLabel",box)
+    dl.Size=UDim2.new(0,200,0,20); dl.Position=UDim2.new(0,70,0,11)
+    dl.BackgroundTransparency=1; dl.Text=date
+    dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=11
+    dl.TextXAlignment=Enum.TextXAlignment.Left
+    local TC={ADD=W.success,FIX=W.warn,CHANGE=W.accent,REMOVE=W.danger}
+    for i,e in ipairs(entries) do
+        local tag,msg=e[1],e[2]
+        local tb=Instance.new("Frame",box)
+        tb.Size=UDim2.new(0,48,0,14); tb.Position=UDim2.new(0,12,0,40+(i-1)*20)
+        tb.BackgroundColor3=TC[tag] or W.txtHint; tb.BackgroundTransparency=0.74; tb.BorderSizePixel=0
+        Instance.new("UICorner",tb).CornerRadius=UDim.new(0,3)
+        local tl=Instance.new("TextLabel",tb)
+        tl.Size=UDim2.new(1,0,1,0); tl.BackgroundTransparency=1; tl.Text=tag
+        tl.TextColor3=TC[tag] or Color3.new(1,1,1); tl.Font=Enum.Font.GothamBold; tl.TextSize=9
+        local ml=Instance.new("TextLabel",box)
+        ml.Size=UDim2.new(1,-68,0,14); ml.Position=UDim2.new(0,64,0,40+(i-1)*20)
+        ml.BackgroundTransparency=1; ml.Text=msg
+        ml.TextColor3=W.txtSec; ml.Font=Enum.Font.Gotham; ml.TextSize=11
+        ml.TextXAlignment=Enum.TextXAlignment.Left
+    end
+end
+
+-- ================================================================
+--  POPULATE TABS
+-- ================================================================
+
+-- ── ESP ──────────────────────────────────────────────────────────
+local EP=getPage("ESP")
+sec(EP,"Entities")
+tog(EP,"Entity ESP","Finds models in Entities + all nested sub-folders",function(v)
+    F.EntityESP=v
+    if not v then
+        local ef=workspace:FindFirstChild("Entities")
+        if ef then for _,d in ipairs(ef:GetDescendants()) do local t=d:FindFirstChild("UnitTag");if t then t:Destroy() end end end
+    end
+end)
+tog(EP,"Entity Chams","Wall-visible highlight on all entity models",function(v)
+    F.EntityChams=v
+    if not v then
+        local ef=workspace:FindFirstChild("Entities")
+        if ef then for _,d in ipairs(ef:GetDescendants()) do local h=d:FindFirstChild("ChamsHL");if h then h:Destroy() end end end
+    end
+end)
+
+sec(EP,"Image Entities  ·  2D Sprites")
+-- Info card explaining what image entities are
+local imgInfoCard=Instance.new("Frame",EP)
+imgInfoCard.Size=UDim2.new(1,0,0,44); imgInfoCard.BackgroundColor3=Color3.fromRGB(35,20,10)
+imgInfoCard.BorderSizePixel=0
+Instance.new("UICorner",imgInfoCard).CornerRadius=UDim.new(0,8)
+Instance.new("UIStroke",imgInfoCard).Color=Color3.fromRGB(120,60,10)
+local imgInfoL=Instance.new("TextLabel",imgInfoCard)
+imgInfoL.Size=UDim2.new(1,-16,1,0); imgInfoL.Position=UDim2.new(0,10,0,0)
+imgInfoL.BackgroundTransparency=1
+imgInfoL.Text="Some entities (Alex, Angry Munci…) are 2D image billboards. They have no 3D model, so standard ESP cannot highlight them. A proximity alert fires instead."
+imgInfoL.TextColor3=Color3.fromRGB(220,155,80); imgInfoL.Font=Enum.Font.Gotham
+imgInfoL.TextSize=9; imgInfoL.TextWrapped=true; imgInfoL.TextXAlignment=Enum.TextXAlignment.Left
+
+tog(EP,"Image Entity Alerts","⚠ Slide-in banner + notification when nearby",function(v)
+    F.ImageAlert=v
+    if v then notify("Image entity alerts enabled", W.success)
+    else      notify("Image entity alerts disabled", W.warn) end
+end)
+
+sec(EP,"Characters")
+tog(EP,"NPC ESP  ⚠ Not Working","Feature currently broken — no labels",function(v) F.NpcESP=v end,true)
+tog(EP,"Player ESP","Green highlight + name/dist/HP tag on all players",function(v)
+    F.PlayerESP=v
+    if not v then
+        for _,p in ipairs(PLR:GetPlayers()) do
+            if p~=LP and p.Character then
+                local h=p.Character:FindFirstChild("P_ESP");if h then h:Destroy() end
+                local b=p.Character:FindFirstChild("P_BILL");if b then b:Destroy() end
+            end
+        end
+    end
+end)
+tog(EP,"Corpse ESP","Red highlight on PlayerCorpses",function(v)
+    F.CorpseESP=v
+    if not v then
+        local cf=workspace:FindFirstChild("Characters") and workspace.Characters:FindFirstChild("PlayerCorpses")
+        if cf then for _,d in ipairs(cf:GetDescendants()) do local h=d:FindFirstChild("CorpseHL");if h then h:Destroy() end end end
+    end
+end)
+sec(EP,"World")
+tog(EP,"Scrap ESP","Gold highlight on Debris > Map items",function(v)
+    F.ScrapESP=v
+    if not v then
+        local dm=workspace:FindFirstChild("Debris") and workspace.Debris:FindFirstChild("Map")
+        if dm then for _,s in ipairs(dm:GetDescendants()) do local t=s:FindFirstChild("ScrapTag");if t then t:Destroy() end end end
+    end
+end)
+
+-- ── WORLD ─────────────────────────────────────────────────────────
+local WP=getPage("WORLD")
+sec(WP,"Lighting")
+tog(WP,"FullBright","Brightness 3, clock noon, shadows off",function(v) F.FullBright=v end)
+tog(WP,"Remove Fog","Sets FogEnd to maximum",function(v)
+    F.NoFog=v; game.Lighting.FogEnd=v and 100000 or 1000; game.Lighting.FogStart=v and 99000 or 0
+end)
+sec(WP,"Map Info")
+local ivMap=inf(WP,"Current map"); local ivSpawns=inf(WP,"Spawn count"); local ivSpawnP=inf(WP,"Spawns path")
+
+-- ── PLAYER ────────────────────────────────────────────────────────
+local PP=getPage("PLAYER")
+sec(PP,"Movement")
+tog(PP,"Noclip","Disables collision on your character parts",function(v)
+    F.Noclip=v
+    if not v then
+        local c=getChar(); if c then for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=true end end end
+    end
+end)
+sec(PP,"Stats")
+sld(PP,"Walk Speed","Multiplier on base 16  ·  enforced every 0.5s",1,10,1,function(v)
+    F.SpeedMult=v
+    applySpeed()   -- apply immediately on change
+end)
+sec(PP,"Safety")
+tog(PP,"Auto Safe Spawn","Teleports to nearest spawn when HP ≤ threshold",function(v) F.AutoSafe=v end)
+sld(PP,"HP Threshold","HP level that triggers teleport",5,95,30,function(v) F.SafeHP=v end)
+actbtn(PP,"Teleport to Spawn","Force teleport regardless of HP","Go",W.accent,function()
+    local ok,msg=doSafeTeleport()
+    notify(ok and "Teleported to safe spawn" or "Failed: "..msg, ok and W.success or W.danger)
+end)
+
+-- ── UTILS ─────────────────────────────────────────────────────────
+local UTP=getPage("UTILS")
+sec(UTP,"Live Stats")
+local ivHP=inf(UTP,"Local HP"); local ivEntC=inf(UTP,"Entities")
+local ivMap2=inf(UTP,"Active map"); local ivSpawnC=inf(UTP,"Spawn parts")
+local ivNpcC=inf(UTP,"NPCs  (broken)")
+local ivImgEnt=inf(UTP,"Image entities nearby")
+
+sec(UTP,"Misc")
+tog(UTP,"Anti AFK","Prevents idle auto-disconnect",function(v)
+    F.AntiAFK=v
+    if v then
+        task.spawn(function()
+            while F.AntiAFK do
+                pcall(function()
+                    game:GetService("VirtualUser"):CaptureController()
+                    game:GetService("VirtualUser"):ClickButton2(Vector2.new())
+                end)
+                task.wait(55)
+            end
+        end)
+    end
+end)
+actbtn(UTP,"Rejoin Server","Re-teleports you to this place","Rejoin",W.danger,function()
+    game:GetService("TeleportService"):Teleport(game.PlaceId,LP)
+end)
+actbtn(UTP,"Copy Position","Copies HRP position to clipboard","Copy",W.accent,function()
+    local hrp=getHRP()
+    if hrp then
+        local p=hrp.Position
+        setclipboard(string.format("Vector3.new(%.2f, %.2f, %.2f)",p.X,p.Y,p.Z))
+        notify("Position copied")
+    else notify("No character",W.danger) end
+end)
+
+if isOwner() then
+    sec(UTP,"Owner Controls  ·  "..OWNER_NAME)
+    actbtn(UTP,"Close Panel","Hide until UH button pressed","Close",W.danger,function()
+        Main.Visible=false; notify("Panel hidden  ·  press UH to reopen")
+    end)
+    local autoHideConn
+    actbtn(UTP,"Auto-Hide on Round Start","Hides panel when new map loads","Enable",W.accentDim,function()
+        if autoHideConn then autoHideConn:Disconnect(); autoHideConn=nil; notify("Auto-hide disabled"); return end
+        local mn=workspace:FindFirstChild("MapFolder") and workspace.MapFolder:FindFirstChild("Main")
+        if mn then
+            autoHideConn=mn.ChildAdded:Connect(function() Main.Visible=false; notify("Round start · panel hidden") end)
+            notify("Auto-hide enabled")
+        else notify("MapFolder.Main not found",W.danger) end
+    end)
+    actbtn(UTP,"Force Spawn TP","Bypasses cooldown, teleports now","TP",Color3.fromRGB(100,0,200),function()
+        local s=F.SafeCooldown; F.SafeCooldown=false
+        local ok,msg=doSafeTeleport(); F.SafeCooldown=s
+        notify(ok and "Owner TP: success" or "Owner TP failed: "..msg, ok and W.success or W.danger)
+    end)
+end
+
+-- ── LOG ───────────────────────────────────────────────────────────
+local CLP=getPage("LOG")
+changeEntry(CLP,"v5.3","Apr 2026",{
+    {"REMOVE","Global Chat — removed"},
+    {"REMOVE","Player/hub user detector — removed"},
+    {"FIX",   "Speed hack: enforcer loop re-applies WalkSpeed every 0.5s"},
+    {"FIX",   "Speed hack: applySpeed() called on CharacterAdded + slider change"},
+    {"ADD",   "Image Entity Alerts — proximity banner for Alex, Angry Munci etc."},
+    {"ADD",   "Alert banner slides in from top, shows entity name + distance"},
+    {"ADD",   "Alert: entity-specific colour (Alex=red, Munci=orange, ...)"},
+    {"ADD",   "Alert: pulsing stroke, 5s auto-dismiss, deduplicated per entity"},
+    {"ADD",   "15 image-entity patterns pre-loaded (Doors, Hours, etc.)"},
+    {"ADD",   "UTILS: Image entities nearby counter"},
+    {"ADD",   "ESP tab: info card explaining why 2D entities need proximity alerts"},
+    {"CHANGE","Gradient updated: deep blue → purple on accent bar, tab underlines"},
+    {"CHANGE","App icon, slider fill, section accents, changelog badge all gradients"},
+    {"CHANGE","Mica tint shifted from blue-grey to deep purple-blue"},
+    {"CHANGE","5 tabs: ESP WORLD PLAYER UTILS LOG"},
+})
+changeEntry(CLP,"v5.1–5.2","Apr 2026",{
+    {"ADD",   "Win11 theme: Mica tint, pivot tabs, toggle switch, slider thumb"},
+    {"ADD",   "Owner crown, OWNER chip, owner-only controls in UTILS"},
+    {"FIX",   "Chat persistence fix (removed in v5.3)"},
+    {"FIX",   "MapL crash eliminated — map tab removed"},
+})
+changeEntry(CLP,"v5.0","Apr 2026",{
+    {"ADD",   "MAP tab, CHAT tab, 3-method user scanner"},
+    {"ADD",   "Player billboard: name + dist + HP"},
+    {"CHANGE","8 tabs, 520×540"},
+})
+changeEntry(CLP,"v4.0","Apr 2026",{
+    {"ADD",   "USERS tab, notification strip, Corpse ESP"},
+    {"CHANGE","6 tabs, 460×480"},
+})
+changeEntry(CLP,"v1.0–v3.0","Apr 2026",{
+    {"ADD",   "Entity/Scrap/Player ESP, FullBright, Speed, Noclip"},
+    {"ADD",   "Tab system, HP bar, sliders, Safe Spawn, Anti AFK, Rejoin"},
+})
+
+-- ================================================================
+--  ESP RUNTIME
+-- ================================================================
+
+-- Entity ESP + Chams
+task.spawn(function()
+    while task.wait(0.5) do
+        local ef=workspace:FindFirstChild("Entities"); local count=0
+        if ef then
+            for _,d in ipairs(ef:GetDescendants()) do
+                if d:IsA("Model") then
+                    count+=1
+                    if F.EntityESP and not d:FindFirstChild("UnitTag") then
+                        local pp=d.PrimaryPart or d:FindFirstChildWhichIsA("BasePart")
+                        if pp then
+                            local bg=Instance.new("BillboardGui",d)
+                            bg.Name="UnitTag"; bg.AlwaysOnTop=true
+                            bg.Size=UDim2.new(0,140,0,44); bg.Adornee=pp
+                            local tl=Instance.new("TextLabel",bg)
+                            tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
+                            tl.TextColor3=Color3.fromRGB(255,70,70)
+                            tl.Font=Enum.Font.GothamBold; tl.TextSize=12
+                            tl.TextStrokeTransparency=0.15; tl.RichText=true
+                            task.spawn(function()
+                                while d.Parent~=nil and F.EntityESP do
+                                    local hrp=getHRP()
+                                    if hrp then
+                                        local dist=math.floor((hrp.Position-pp.Position).Magnitude)
+                                        tl.Text="<b>"..d.Name.."</b>\n<font size=\"10\">"..dist.." studs</font>"
+                                    end
+                                    task.wait(0.15)
+                                end
+                                pcall(function() bg:Destroy() end)
+                            end)
+                        end
+                    end
+                    if F.EntityChams and not d:FindFirstChild("ChamsHL") then
+                        local h=Instance.new("Highlight",d)
+                        h.Name="ChamsHL"; h.FillColor=Color3.fromRGB(90,0,210)
+                        h.OutlineColor=Color3.fromRGB(165,70,255); h.FillTransparency=0.35
+                        task.spawn(function()
+                            while d.Parent~=nil and F.EntityChams do task.wait(0.5) end
+                            pcall(function() h:Destroy() end)
+                        end)
+                    end
+                end
+            end
+        end
+        ivEntC.Text=tostring(count)
+    end
+end)
+
+-- ================================================================
+--  IMAGE-ENTITY PROXIMITY SCANNER
+--  Scans workspace (Entities folder + root) for BillboardGuis or
+--  ImageLabels that match known 2D-entity names.
+--  Also scans Models named after known entities regardless of content
+--  (the billboard might be inside a Model wrapper).
+--  Alert threshold: 80 studs (they are dangerous up close).
+-- ================================================================
+local ALERT_RANGE = 80  -- studs
+
+task.spawn(function()
+    while task.wait(0.4) do
+        if not F.ImageAlert then
+            ivImgEnt.Text = "alerts off"
+            continue
+        end
+
+        local hrp = getHRP()
+        if not hrp then continue end
+        local selfPos = hrp.Position
+
+        local nearbyCount = 0
+        local closestDist = math.huge
+        local closestEntry = nil
+
+        -- Scan workspace root AND Entities folder
+        local scanRoots = {workspace}
+        local ef = workspace:FindFirstChild("Entities")
+        if ef then table.insert(scanRoots, ef) end
+
+        local checkedNames = {}
+
+        for _, root in ipairs(scanRoots) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                -- Check models/parts by name
+                if obj:IsA("Model") or obj:IsA("BasePart") or obj:IsA("BillboardGui") then
+                    local entry = matchImageEntity(obj.Name)
+                    if entry and not checkedNames[entry.pattern] then
+                        -- Get position
+                        local pos
+                        if obj:IsA("Model") then
+                            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                            if pp then pos = pp.Position end
+                        elseif obj:IsA("BasePart") then
+                            pos = obj.Position
+                        elseif obj:IsA("BillboardGui") and obj.Adornee and obj.Adornee:IsA("BasePart") then
+                            pos = obj.Adornee.Position
+                        elseif obj:IsA("BillboardGui") then
+                            local p = obj.Parent
+                            if p and p:IsA("BasePart") then pos = p.Position end
+                        end
+
+                        if pos then
+                            local dist = (selfPos - pos).Magnitude
+                            nearbyCount += 1
+                            if dist < closestDist then
+                                closestDist = dist
+                                closestEntry = {entry=entry, dist=dist}
+                            end
+                            -- only show one alert per pattern per 8s
+                            if dist <= ALERT_RANGE then
+                                local now = tick()
+                                local lastAlert = imageEntityAlerted[entry.pattern] or 0
+                                if now - lastAlert > 8 then
+                                    imageEntityAlerted[entry.pattern] = now
+                                    showAlert(entry.label, dist, entry.color)
+                                    notify("⚠ "..entry.label.." detected — "..math.floor(dist).." studs", entry.color)
+                                end
+                                checkedNames[entry.pattern] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if nearbyCount > 0 and closestEntry then
+            ivImgEnt.Text = nearbyCount.." found  ·  "..math.floor(closestEntry.dist).." st"
+            ivImgEnt.TextColor3 = closestEntry.dist <= ALERT_RANGE and W.danger or W.warn
+        else
+            ivImgEnt.Text = "none detected"
+            ivImgEnt.TextColor3 = W.txtSec
+        end
+    end
+end)
+
+-- Player ESP
+task.spawn(function()
+    while task.wait(0.8) do
+        if not F.PlayerESP then continue end
+        for _,p in ipairs(PLR:GetPlayers()) do
+            if p~=LP and p.Character then
+                if not p.Character:FindFirstChild("P_ESP") then
+                    local h=Instance.new("Highlight",p.Character)
+                    h.Name="P_ESP"; h.FillColor=Color3.fromRGB(0,190,90)
+                    h.OutlineColor=Color3.fromRGB(0,245,120); h.FillTransparency=0.38
+                    task.spawn(function()
+                        while p.Character and p.Character:FindFirstChild("P_ESP") and F.PlayerESP do task.wait(0.8) end
+                        pcall(function()
+                            if p.Character then
+                                local e=p.Character:FindFirstChild("P_ESP"); if e then e:Destroy() end
+                                local b=p.Character:FindFirstChild("P_BILL"); if b then b:Destroy() end
+                            end
+                        end)
+                    end)
+                end
+                if not p.Character:FindFirstChild("P_BILL") then
+                    local rp=p.Character:FindFirstChild("HumanoidRootPart")
+                    if rp then
+                        local bg=Instance.new("BillboardGui",p.Character)
+                        bg.Name="P_BILL"; bg.AlwaysOnTop=true
+                        bg.Size=UDim2.new(0,130,0,40); bg.StudsOffset=Vector3.new(0,3,0); bg.Adornee=rp
+                        local tl=Instance.new("TextLabel",bg)
+                        tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
+                        tl.TextColor3=Color3.fromRGB(50,220,110)
+                        tl.Font=Enum.Font.GothamBold; tl.TextSize=11
+                        tl.TextStrokeTransparency=0.15; tl.RichText=true
+                        task.spawn(function()
+                            while p.Character and p.Character:FindFirstChild("P_BILL") and F.PlayerESP do
+                                local hrp=getHRP()
+                                if hrp and p.Character then
+                                    local ph=p.Character:FindFirstChild("HumanoidRootPart")
+                                    local ph2=p.Character:FindFirstChildOfClass("Humanoid")
+                                    if ph and ph2 then
+                                        local dist=math.floor((hrp.Position-ph.Position).Magnitude)
+                                        tl.Text="<b>"..p.Name.."</b>\n<font size=\"10\">"..dist.." studs  ·  "..math.floor(ph2.Health).." HP</font>"
+                                    end
+                                end
+                                task.wait(0.2)
+                            end
+                            pcall(function() bg:Destroy() end)
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Scrap ESP
+task.spawn(function()
+    while task.wait(1) do
+        if not F.ScrapESP then continue end
+        local dm=workspace:FindFirstChild("Debris") and workspace.Debris:FindFirstChild("Map")
+        if not dm then continue end
+        for _,s in ipairs(dm:GetDescendants()) do
+            if (s:IsA("Model") or s:IsA("BasePart")) and not s:FindFirstChild("ScrapTag") then
+                local h=Instance.new("Highlight",s)
+                h.Name="ScrapTag"; h.FillColor=Color3.fromRGB(210,130,0)
+                h.OutlineColor=Color3.fromRGB(255,195,45); h.FillTransparency=0.45
+                task.spawn(function()
+                    while s.Parent~=nil and F.ScrapESP do task.wait(1) end
+                    pcall(function() h:Destroy() end)
+                end)
+            end
+        end
+    end
+end)
+
+-- Corpse ESP
+task.spawn(function()
+    while task.wait(1) do
+        if not F.CorpseESP then continue end
+        local cf=workspace:FindFirstChild("Characters") and workspace.Characters:FindFirstChild("PlayerCorpses")
+        if not cf then continue end
+        for _,m in ipairs(cf:GetDescendants()) do
+            if (m:IsA("Model") or m:IsA("BasePart")) and not m:FindFirstChild("CorpseHL") then
+                local h=Instance.new("Highlight",m)
+                h.Name="CorpseHL"; h.FillColor=Color3.fromRGB(195,20,20)
+                h.OutlineColor=Color3.fromRGB(255,75,75); h.FillTransparency=0.5
+                task.spawn(function()
+                    while m.Parent~=nil and F.CorpseESP do task.wait(1) end
+                    pcall(function() h:Destroy() end)
+                end)
+            end
+        end
+    end
+end)
+
+-- ================================================================
+--  LIGHTING
+-- ================================================================
+task.spawn(function()
+    while task.wait(0.5) do
+        if F.FullBright then
+            game.Lighting.Brightness=3; game.Lighting.ClockTime=14
+            game.Lighting.GlobalShadows=false; game.Lighting.FogEnd=100000
+        end
+    end
+end)
+
+-- ================================================================
+--  MOVEMENT  (Noclip)
+-- ================================================================
+RS.Stepped:Connect(function()
+    if not F.Noclip then return end
+    local c=getChar(); if not c then return end
+    for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end
+end)
+
+-- ================================================================
+--  SPEED ENFORCER  — FIX v5.3
+--  Runs every 0.5 s and re-applies WalkSpeed if the game reset it.
+--  This covers round restarts, teleports, server corrections, etc.
+-- ================================================================
+task.spawn(function()
+    while task.wait(0.5) do
+        if F.SpeedMult > 1 then
+            applySpeed()
+        end
+    end
+end)
+
+LP.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    local h=char:FindFirstChildOfClass("Humanoid")
+    if h then h.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+    applyCharAttr(char)
+end)
+
+-- ================================================================
+--  HP MONITOR + AUTO SAFE SPAWN
+-- ================================================================
+task.spawn(function()
+    while task.wait(0.15) do
+        local hum=getHum(); if not hum then continue end
+        local hp=math.floor(hum.Health)
+        local maxHP=math.max(math.floor(hum.MaxHealth),1)
+        local pct=math.clamp(hp/maxHP,0,1)
+        HPLbl.Text="HP  "..hp.." / "..maxHP
+        local col=pct>0.6 and W.success or pct>0.3 and W.warn or W.danger
+        tw(HPFill,0.2,{Size=UDim2.new(pct,0,1,0),BackgroundColor3=col})
+        ivHP.Text=hp.." / "..maxHP
+        if F.AutoSafe and not F.SafeCooldown and hp>0 and hp<=F.SafeHP then
+            F.SafeCooldown=true
+            local ok,msg=doSafeTeleport()
+            notify(ok and "Auto safe spawn triggered" or "Safe spawn failed: "..msg, ok and W.success or W.danger)
+            task.delay(5,function() F.SafeCooldown=false end)
+        end
+    end
+end)
+
+-- ================================================================
+--  MAP INFO + UTILS STATS
+-- ================================================================
+task.spawn(function()
+    while task.wait(1) do
+        local map=getCurrentMap()
+        if map then
+            local name=map.Name
+            ivMap.Text=name; ivMap2.Text=name
+            local sf=map:FindFirstChild("Spawns")
+            if not sf then
+                for _,d in ipairs(map:GetDescendants()) do
+                    if (d:IsA("Folder") or d:IsA("Model")) and d.Name:lower()=="spawns" then sf=d; break end
+                end
+            end
+            if sf then
+                local cnt=0
+                for _,s in ipairs(sf:GetChildren()) do if s:IsA("BasePart") or s:IsA("SpawnLocation") then cnt+=1 end end
+                ivSpawns.Text=tostring(cnt); ivSpawnC.Text=tostring(cnt); ivSpawnP.Text=sf:GetFullName()
+            else
+                ivSpawns.Text="0"; ivSpawnC.Text="0"; ivSpawnP.Text="not found"
+            end
+        else
+            ivMap.Text="none"; ivMap2.Text="none"
+            ivSpawns.Text="—"; ivSpawnC.Text="—"; ivSpawnP.Text="—"
+        end
+        ivNpcC.Text="N/A"
+    end
+end)
+
+-- ================================================================
+--  FLOATING TOGGLE BUTTON
+-- ================================================================
+local Tog=Instance.new("TextButton",SG)
+Tog.Size=UDim2.new(0,40,0,40); Tog.Position=UDim2.new(0,10,0.5,0)
+Tog.BackgroundColor3=W.surface; Tog.Text="UH"
+Tog.TextColor3=W.accent; Tog.Font=Enum.Font.GothamBlack
+Tog.TextSize=11; Tog.AutoButtonColor=false; Tog.BorderSizePixel=0
+Instance.new("UICorner",Tog).CornerRadius=UDim.new(0,10)
+local togS=Instance.new("UIStroke",Tog); togS.Color=W.sep; togS.Thickness=1.2
+Tog.MouseEnter:Connect(function() tw(togS,0.1,{Color=W.accent}) end)
+Tog.MouseLeave:Connect(function() tw(togS,0.1,{Color=W.sep}) end)
+Tog.MouseButton1Click:Connect(function() Main.Visible=not Main.Visible end)
+
+-- ================================================================
+--  STARTUP
+-- ================================================================
+task.delay(0.5,function()
+    notify("Unit Hub v5.3 loaded  ·  "..LP.Name..(isOwner() and "  👑" or ""))
+end)
