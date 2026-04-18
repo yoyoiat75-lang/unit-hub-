@@ -1,0 +1,718 @@
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local GuiService = game:GetService("GuiService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "unit_hub_v2"
+ScreenGui.Parent = game:GetService("CoreGui")
+ScreenGui.ResetOnSpawn = false
+
+-- ==================== KEY SYSTEM ====================
+local CorrectKey = "folan_key"
+
+local KeyFrame = Instance.new("Frame", ScreenGui)
+KeyFrame.Size = UDim2.new(0, 360, 0, 260)
+KeyFrame.Position = UDim2.new(0.5, -180, 0.5, -130)
+KeyFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+KeyFrame.BorderSizePixel = 0
+Instance.new("UICorner", KeyFrame).CornerRadius = UDim.new(0, 18)
+
+local KeyStroke = Instance.new("UIStroke", KeyFrame)
+KeyStroke.Color = Color3.fromRGB(70, 70, 70)
+KeyStroke.Thickness = 2
+
+local KeyGrad = Instance.new("UIGradient", KeyFrame)
+KeyGrad.Color = ColorSequence.new{
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(14, 14, 14)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(5, 5, 5))
+}
+KeyGrad.Rotation = 135
+
+local KeyTitle = Instance.new("TextLabel", KeyFrame)
+KeyTitle.Size = UDim2.new(1, 0, 0, 50)
+KeyTitle.BackgroundTransparency = 1
+KeyTitle.Text = "UNIT HUB"
+KeyTitle.TextColor3 = Color3.fromRGB(230, 230, 230)
+KeyTitle.Font = Enum.Font.GothamBlack
+KeyTitle.TextSize = 24
+
+local KeySub = Instance.new("TextLabel", KeyFrame)
+KeySub.Size = UDim2.new(1, 0, 0, 20)
+KeySub.Position = UDim2.new(0, 0, 0, 44)
+KeySub.BackgroundTransparency = 1
+KeySub.Text = "enter your key to continue"
+KeySub.TextColor3 = Color3.fromRGB(110, 110, 110)
+KeySub.Font = Enum.Font.Gotham
+KeySub.TextSize = 13
+
+local KeyInput = Instance.new("TextBox", KeyFrame)
+KeyInput.Size = UDim2.new(0.85, 0, 0, 46)
+KeyInput.Position = UDim2.new(0.075, 0, 0.33, 0)
+KeyInput.PlaceholderText = "key here..."
+KeyInput.PlaceholderColor3 = Color3.fromRGB(70, 70, 70)
+KeyInput.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+KeyInput.TextColor3 = Color3.fromRGB(220, 220, 220)
+KeyInput.Font = Enum.Font.Gotham
+KeyInput.TextSize = 17
+KeyInput.ClearTextOnFocus = false
+Instance.new("UICorner", KeyInput).CornerRadius = UDim.new(0, 10)
+local KeyInputStroke = Instance.new("UIStroke", KeyInput)
+KeyInputStroke.Color = Color3.fromRGB(55, 55, 55)
+KeyInputStroke.Thickness = 1.5
+
+local SubmitBtn = Instance.new("TextButton", KeyFrame)
+SubmitBtn.Size = UDim2.new(0.85, 0, 0, 44)
+SubmitBtn.Position = UDim2.new(0.075, 0, 0.59, 0)
+SubmitBtn.Text = "SUBMIT"
+SubmitBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+SubmitBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+SubmitBtn.Font = Enum.Font.GothamBold
+SubmitBtn.TextSize = 17
+Instance.new("UICorner", SubmitBtn).CornerRadius = UDim.new(0, 10)
+local SubmitStroke = Instance.new("UIStroke", SubmitBtn)
+SubmitStroke.Color = Color3.fromRGB(70, 70, 70)
+SubmitStroke.Thickness = 1.5
+
+local DiscordBtn = Instance.new("TextButton", KeyFrame)
+DiscordBtn.Size = UDim2.new(0.85, 0, 0, 38)
+DiscordBtn.Position = UDim2.new(0.075, 0, 0.80, 0)
+DiscordBtn.Text = "GET KEY  →  DISCORD"
+DiscordBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+DiscordBtn.TextColor3 = Color3.fromRGB(140, 140, 140)
+DiscordBtn.Font = Enum.Font.GothamBold
+DiscordBtn.TextSize = 15
+Instance.new("UICorner", DiscordBtn).CornerRadius = UDim.new(0, 10)
+
+local KeyStatus = Instance.new("TextLabel", KeyFrame)
+KeyStatus.Size = UDim2.new(1, 0, 0, 24)
+KeyStatus.Position = UDim2.new(0, 0, 1, -28)
+KeyStatus.BackgroundTransparency = 1
+KeyStatus.Text = ""
+KeyStatus.TextColor3 = Color3.fromRGB(255, 80, 80)
+KeyStatus.Font = Enum.Font.Gotham
+KeyStatus.TextSize = 14
+
+DiscordBtn.MouseButton1Click:Connect(function()
+    GuiService:OpenBrowserWindow("https://discord.gg/89bnsPEcq")
+end)
+
+-- ==================== MAIN GUI ====================
+local MainFrame = nil
+local ScannedEggs = {}
+local SelectedEggs = {}
+local Highlights = {}
+local itemCheckMap = {}
+
+local TargetNames = {
+    "point_egg_1","point_egg_2","point_egg_3","point_egg_4",
+    "point_egg_5","point_egg_6","point_egg_7",
+    "random_potion_egg_1","random_potion_egg_2","random_potion_egg_3",
+    "random_potion_egg_4","random_potion_egg_5"
+}
+local TargetSet = {}
+for _, n in ipairs(TargetNames) do TargetSet[n] = true end
+
+local function CreateMainGUI()
+    if MainFrame then return end
+
+    -- ===== FRAME =====
+    MainFrame = Instance.new("Frame", ScreenGui)
+    MainFrame.Size = UDim2.new(0, 460, 0, 560)
+    MainFrame.Position = UDim2.new(0.5, -230, 0.5, -280)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(6, 6, 6)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.ClipsDescendants = true
+    MainFrame.BackgroundTransparency = 1
+    Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 20)
+
+    local BgGrad = Instance.new("UIGradient", MainFrame)
+    BgGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(12, 12, 12)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(28, 28, 28))
+    }
+    BgGrad.Rotation = 135
+
+    local Stroke = Instance.new("UIStroke", MainFrame)
+    Stroke.Color = Color3.fromRGB(50, 50, 50)
+    Stroke.Thickness = 2
+    Stroke.Transparency = 1
+
+    -- Hint
+    local HintLabel = Instance.new("TextLabel", ScreenGui)
+    HintLabel.Size = UDim2.new(0, 300, 0, 26)
+    HintLabel.Position = UDim2.new(0, 14, 1, -40)
+    HintLabel.BackgroundTransparency = 1
+    HintLabel.Text = "[ Z ] Toggle   [ E ] Select nearest"
+    HintLabel.TextColor3 = Color3.fromRGB(80, 80, 80)
+    HintLabel.Font = Enum.Font.Gotham
+    HintLabel.TextSize = 13
+    HintLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Hello animation
+    local HelloLabel = Instance.new("TextLabel", MainFrame)
+    HelloLabel.Size = UDim2.new(1, 0, 1, 0)
+    HelloLabel.Text = "UNIT HUB"
+    HelloLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    HelloLabel.Font = Enum.Font.GothamBlack
+    HelloLabel.TextSize = 50
+    HelloLabel.BackgroundTransparency = 1
+    HelloLabel.TextTransparency = 1
+
+    -- Content
+    local Content = Instance.new("CanvasGroup", MainFrame)
+    Content.Size = UDim2.new(1, 0, 1, 0)
+    Content.BackgroundTransparency = 1
+    Content.GroupTransparency = 1
+    Content.Visible = false
+
+    -- Header
+    local Header = Instance.new("Frame", Content)
+    Header.Size = UDim2.new(1, 0, 0, 60)
+    Header.BackgroundTransparency = 1
+
+    local Title = Instance.new("TextLabel", Header)
+    Title.Size = UDim2.new(1, -20, 1, 0)
+    Title.Position = UDim2.new(0, 18, 0, 0)
+    Title.Text = "UNIT HUB"
+    Title.TextColor3 = Color3.fromRGB(240, 240, 240)
+    Title.Font = Enum.Font.GothamBlack
+    Title.TextSize = 24
+    Title.BackgroundTransparency = 1
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+
+    local CountLabel = Instance.new("TextLabel", Header)
+    CountLabel.Size = UDim2.new(0, 100, 0, 26)
+    CountLabel.Position = UDim2.new(1, -114, 0.5, -13)
+    CountLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
+    CountLabel.Text = "loading..."
+    CountLabel.TextColor3 = Color3.fromRGB(140, 140, 140)
+    CountLabel.Font = Enum.Font.Gotham
+    CountLabel.TextSize = 13
+    Instance.new("UICorner", CountLabel).CornerRadius = UDim.new(0, 7)
+    Instance.new("UIStroke", CountLabel).Color = Color3.fromRGB(40, 40, 40)
+
+    local Divider = Instance.new("Frame", Content)
+    Divider.Size = UDim2.new(1, -36, 0, 1)
+    Divider.Position = UDim2.new(0, 18, 0, 62)
+    Divider.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    Divider.BorderSizePixel = 0
+
+    -- Scroll
+    local Scroll = Instance.new("ScrollingFrame", Content)
+    Scroll.Size = UDim2.new(1, -36, 1, -148)
+    Scroll.Position = UDim2.new(0, 18, 0, 70)
+    Scroll.BackgroundTransparency = 1
+    Scroll.ScrollBarThickness = 4
+    Scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
+    Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Scroll.BorderSizePixel = 0
+
+    local UIList = Instance.new("UIListLayout", Scroll)
+    UIList.Padding = UDim.new(0, 8)
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local UIPad = Instance.new("UIPadding", Scroll)
+    UIPad.PaddingTop = UDim.new(0, 6)
+    UIPad.PaddingBottom = UDim.new(0, 6)
+
+    -- Bottom buttons
+    local BtnBar = Instance.new("Frame", Content)
+    BtnBar.Size = UDim2.new(1, -36, 0, 50)
+    BtnBar.Position = UDim2.new(0, 18, 1, -66)
+    BtnBar.BackgroundTransparency = 1
+
+    local BtnList = Instance.new("UIListLayout", BtnBar)
+    BtnList.FillDirection = Enum.FillDirection.Horizontal
+    BtnList.Padding = UDim.new(0, 10)
+    BtnList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    BtnList.VerticalAlignment = Enum.VerticalAlignment.Center
+
+    local function MakeBtn(label, color)
+        local B = Instance.new("TextButton", BtnBar)
+        B.Size = UDim2.new(0, 190, 0, 46)
+        B.Text = label
+        B.BackgroundColor3 = color
+        B.TextColor3 = Color3.fromRGB(220, 220, 220)
+        B.Font = Enum.Font.GothamBold
+        B.TextSize = 16
+        B.AutoButtonColor = false
+        Instance.new("UICorner", B).CornerRadius = UDim.new(0, 12)
+        local st = Instance.new("UIStroke", B)
+        st.Color = Color3.fromRGB(60, 60, 60)
+        st.Thickness = 1.2
+        B.MouseEnter:Connect(function()
+            TweenService:Create(B, TweenInfo.new(0.15), {BackgroundColor3 = color:Lerp(Color3.new(1,1,1), 0.12)}):Play()
+        end)
+        B.MouseLeave:Connect(function()
+            TweenService:Create(B, TweenInfo.new(0.15), {BackgroundColor3 = color}):Play()
+        end)
+        return B
+    end
+
+    local SelectAllBtn = MakeBtn("✓  SELECT ALL", Color3.fromRGB(22, 22, 22))
+    local AutoBtn      = MakeBtn("▶  AUTO ALL",   Color3.fromRGB(22, 22, 22))
+
+    -- ===== ESP =====
+    local function AddESP(obj)
+        if Highlights[obj] then return end
+        local hl = Instance.new("Highlight")
+        hl.Adornee = obj
+        hl.FillColor = Color3.fromRGB(200, 200, 200)
+        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+        hl.FillTransparency = 0.75
+        hl.OutlineTransparency = 0.3
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = ScreenGui
+        Highlights[obj] = hl
+    end
+
+    local function ClearESP()
+        for _, hl in pairs(Highlights) do hl:Destroy() end
+        Highlights = {}
+    end
+
+    -- ===== IMPROVED WALK TO EGG =====
+    local isAutoRunning = false
+
+    local function WalkToEgg(targetObj)
+        local character = LocalPlayer.Character
+        if not character then return end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local root     = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not root then return end
+        if not targetObj or not targetObj.Parent then return end
+
+        local targetPos = (targetObj:IsA("Model") and targetObj:GetPivot().Position or targetObj.Position)
+
+        -- Direct distance check — if close enough, just press E
+        if (root.Position - targetPos).Magnitude < 10 then
+            VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.E, false, game)
+            task.wait(0.1)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            task.wait(0.5)
+            return
+        end
+
+        local path = PathfindingService:CreatePath({
+            AgentRadius   = 2,
+            AgentHeight   = 5,
+            AgentCanJump  = true,
+            AgentCanClimb = true,
+            WaypointSpacing = 4,
+        })
+
+        local success, err = pcall(function()
+            path:ComputeAsync(root.Position, targetPos)
+        end)
+
+        if not success or path.Status ~= Enum.PathStatus.Success then
+            -- Fallback: direct move
+            humanoid:MoveTo(targetPos)
+            local t = tick()
+            repeat task.wait(0.1) until (root.Position - targetPos).Magnitude < 8 or tick() - t > 10
+            VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.E, false, game)
+            task.wait(0.1)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            task.wait(0.5)
+            return
+        end
+
+        local waypoints = path:GetWaypoints()
+        local blocked = false
+
+        local blockedConn = path.Blocked:Connect(function(idx)
+            if idx >= 1 then blocked = true end
+        end)
+
+        for i, wp in ipairs(waypoints) do
+            if blocked or not isAutoRunning then break end
+            if not targetObj.Parent then break end
+
+            -- Jump waypoints
+            if wp.Action == Enum.PathWaypointAction.Jump then
+                humanoid.Jump = true
+                task.wait(0.15)
+            end
+
+            humanoid:MoveTo(wp.Position)
+
+            local moveStart = tick()
+            local lastPos   = root.Position
+            local stuckTime = 0
+
+            -- Wait until reached or timeout
+            local reached = false
+            while not reached do
+                task.wait(0.1)
+
+                local cur  = root.Position
+                local dist = (cur - wp.Position).Magnitude
+
+                if dist < 5 then
+                    reached = true
+                    break
+                end
+
+                -- Stuck detection
+                local moved = (cur - lastPos).Magnitude
+                if moved < 0.5 then
+                    stuckTime += 0.1
+                else
+                    stuckTime = 0
+                end
+                lastPos = cur
+
+                -- Jump if stuck
+                if stuckTime >= 0.8 then
+                    humanoid.Jump = true
+                    task.wait(0.35)
+                    humanoid.Jump = true
+                    stuckTime = 0
+                end
+
+                -- Hard timeout per waypoint
+                if tick() - moveStart > 5 then
+                    break
+                end
+            end
+
+            -- Early exit if now close enough to egg
+            if targetObj.Parent then
+                local eggPos = targetObj:IsA("Model") and targetObj:GetPivot().Position or targetObj.Position
+                if (root.Position - eggPos).Magnitude < 8 then break end
+            end
+        end
+
+        blockedConn:Disconnect()
+
+        task.wait(0.1)
+        VirtualInputManager:SendKeyEvent(true,  Enum.KeyCode.E, false, game)
+        task.wait(0.1)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        task.wait(0.5)
+    end
+
+    -- ===== ADD ITEM =====
+    local function AddItem(name, obj, order)
+        local Item = Instance.new("Frame", Scroll)
+        Item.Size = UDim2.new(1, 0, 0, 54)
+        Item.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+        Item.LayoutOrder = order or 0
+        Instance.new("UICorner", Item).CornerRadius = UDim.new(0, 11)
+        local ist = Instance.new("UIStroke", Item)
+        ist.Color = Color3.fromRGB(38, 38, 38)
+        ist.Thickness = 1
+
+        local Dot = Instance.new("Frame", Item)
+        Dot.Size = UDim2.new(0, 7, 0, 7)
+        Dot.Position = UDim2.new(0, 16, 0.5, -3)
+        Dot.BackgroundColor3 = Color3.fromRGB(160, 160, 160)
+        Dot.BorderSizePixel = 0
+        Instance.new("UICorner", Dot).CornerRadius = UDim.new(1, 0)
+
+        local Lbl = Instance.new("TextLabel", Item)
+        Lbl.Size = UDim2.new(1, -90, 1, 0)
+        Lbl.Position = UDim2.new(0, 34, 0, 0)
+        Lbl.Text = name:lower()
+        Lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        Lbl.Font = Enum.Font.Gotham
+        Lbl.TextSize = 16
+        Lbl.BackgroundTransparency = 1
+        Lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+        local Check = Instance.new("TextButton", Item)
+        Check.Size = UDim2.new(0, 44, 0, 44)
+        Check.Position = UDim2.new(1, -56, 0.5, -22)
+        Check.Text = "+"
+        Check.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        Check.TextColor3 = Color3.fromRGB(160, 160, 160)
+        Check.Font = Enum.Font.GothamBold
+        Check.TextSize = 22
+        Instance.new("UICorner", Check).CornerRadius = UDim.new(0, 9)
+        local cst = Instance.new("UIStroke", Check)
+        cst.Color = Color3.fromRGB(50, 50, 50)
+        cst.Thickness = 1
+
+        itemCheckMap[obj] = Check
+
+        local function UpdateCheck()
+            if SelectedEggs[obj] then
+                Check.Text = "✓"
+                Check.TextColor3 = Color3.fromRGB(220, 220, 220)
+                Check.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+                Dot.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+            else
+                Check.Text = "+"
+                Check.TextColor3 = Color3.fromRGB(100, 100, 100)
+                Check.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+                Dot.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+            end
+        end
+
+        Check.MouseButton1Click:Connect(function()
+            if SelectedEggs[obj] then
+                SelectedEggs[obj] = nil
+            else
+                SelectedEggs[obj] = true
+            end
+            UpdateCheck()
+        end)
+    end
+
+ -- ===== AUTO SCAN + LIVE UPDATE =====
+local function ScanWorkspace()
+    local found = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if TargetSet[string.lower(obj.Name)] then
+            table.insert(found, obj)
+        end
+    end
+    return found
+end
+
+local function RefreshList()
+    -- Clear old UI rows only
+    for _, v in ipairs(Scroll:GetChildren()) do
+        if v:IsA("Frame") then v:Destroy() end
+    end
+    ClearESP()
+    ScannedEggs = {}
+    itemCheckMap = {}
+    -- Keep SelectedEggs intact so selections survive a refresh
+
+    local found = ScanWorkspace()
+    local BATCH = 3
+    for i, obj in ipairs(found) do
+        table.insert(ScannedEggs, obj)
+        AddItem(obj.Name, obj, i)
+        AddESP(obj)
+        if i % BATCH == 0 then task.wait() end
+    end
+
+    CountLabel.Text = #ScannedEggs .. " egg" .. (#ScannedEggs ~= 1 and "s" or "")
+
+    if #ScannedEggs == 0 then
+        local Empty = Instance.new("TextLabel", Scroll)
+        Empty.Size = UDim2.new(1, 0, 0, 40)
+        Empty.BackgroundTransparency = 1
+        Empty.Text = "no eggs found"
+        Empty.TextColor3 = Color3.fromRGB(70, 70, 70)
+        Empty.Font = Enum.Font.Gotham
+        Empty.TextSize = 15
+    end
+end
+
+-- Initial scan
+task.spawn(function()
+    task.wait(0.3)
+    RefreshList()
+end)
+
+-- Watch for new/removed descendants every 3 seconds
+task.spawn(function()
+    while true do
+        task.wait(3)
+        -- Quick count check first (cheap)
+        local found = ScanWorkspace()
+        if #found ~= #ScannedEggs then
+            RefreshList()
+        else
+            -- Also check if any existing eggs were removed from workspace
+            local anyGone = false
+            for _, egg in ipairs(ScannedEggs) do
+                if not egg or not egg.Parent then
+                    anyGone = true
+                    break
+                end
+            end
+            if anyGone then RefreshList() end
+        end
+    end
+end)
+
+-- Also react instantly when something is added to workspace
+workspace.DescendantAdded:Connect(function(obj)
+    if TargetSet[string.lower(obj.Name)] then
+        task.wait(0.1) -- let it fully load
+        RefreshList()
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(obj)
+    if TargetSet[string.lower(obj.Name)] then
+        task.wait(0.05)
+        RefreshList()
+    end
+end)
+    -- ===== SELECT ALL =====
+    SelectAllBtn.MouseButton1Click:Connect(function()
+        if #ScannedEggs == 0 then return end
+        for _, obj in ipairs(ScannedEggs) do
+            SelectedEggs[obj] = true
+            local chk = itemCheckMap[obj]
+            if chk then
+                chk.Text = "✓"
+                chk.TextColor3 = Color3.fromRGB(220, 220, 220)
+                chk.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+            end
+        end
+        Title.Text = "ALL SELECTED ✓"
+        task.wait(1.2)
+        Title.Text = "UNIT HUB"
+    end)
+
+    -- ===== AUTO ALL =====
+    AutoBtn.MouseButton1Click:Connect(function()
+        if isAutoRunning then
+            isAutoRunning = false
+            Title.Text = "STOPPED"
+            task.wait(1); Title.Text = "UNIT HUB"
+            AutoBtn.Text = "▶  AUTO ALL"
+            return
+        end
+
+        local toCollect = {}
+        for obj in pairs(SelectedEggs) do
+            if obj and obj.Parent then
+                table.insert(toCollect, obj)
+            end
+        end
+
+        if #toCollect == 0 then
+            Title.Text = "NOTHING SELECTED"
+            task.wait(1.8); Title.Text = "UNIT HUB"; return
+        end
+
+        isAutoRunning = true
+        AutoBtn.Text = "■  STOP"
+
+        for _, egg in ipairs(toCollect) do
+            if not isAutoRunning then break end
+            if not egg or not egg.Parent then continue end
+            Title.Text = "→ " .. egg.Name:lower()
+            WalkToEgg(egg)
+        end
+
+        isAutoRunning = false
+        AutoBtn.Text = "▶  AUTO ALL"
+        Title.Text = "DONE ✓"
+        task.wait(2); Title.Text = "UNIT HUB"
+    end)
+
+    -- ===== E KEY =====
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.E then
+            if #ScannedEggs == 0 then return end
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            local closest, minDist = nil, math.huge
+            for _, egg in ipairs(ScannedEggs) do
+                if egg and egg.Parent then
+                    local pos = egg:IsA("Model") and egg:GetPivot().Position or egg.Position
+                    local d = (root.Position - pos).Magnitude
+                    if d < minDist then minDist = d; closest = egg end
+                end
+            end
+            if closest and minDist < 400 then
+                if SelectedEggs[closest] then
+                    SelectedEggs[closest] = nil
+                else
+                    SelectedEggs[closest] = true
+                end
+                local chk = itemCheckMap[closest]
+                if chk then
+                    if SelectedEggs[closest] then
+                        chk.Text = "✓"; chk.TextColor3 = Color3.fromRGB(220,220,220)
+                        chk.BackgroundColor3 = Color3.fromRGB(32,32,32)
+                        Title.Text = "SELECTED: " .. closest.Name:lower()
+                    else
+                        chk.Text = "+"; chk.TextColor3 = Color3.fromRGB(100,100,100)
+                        chk.BackgroundColor3 = Color3.fromRGB(20,20,20)
+                        Title.Text = "REMOVED: " .. closest.Name:lower()
+                    end
+                end
+                task.wait(1.2); Title.Text = "UNIT HUB"
+            end
+        end
+    end)
+
+    -- ===== DRAG =====
+    local dragging, dragStart, startPos = false, nil, nil
+    Header.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true; dragStart = i.Position; startPos = MainFrame.Position
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = i.Position - dragStart
+            MainFrame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+
+    -- ===== Z TOGGLE =====
+    local guiVisible = true
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.Z then
+            guiVisible = not guiVisible
+            if guiVisible then
+                MainFrame.Visible = true
+                TweenService:Create(MainFrame, TweenInfo.new(0.25), {BackgroundTransparency = 0}):Play()
+                TweenService:Create(Stroke,    TweenInfo.new(0.25), {Transparency = 0}):Play()
+                TweenService:Create(Content,   TweenInfo.new(0.25), {GroupTransparency = 0}):Play()
+            else
+                TweenService:Create(MainFrame, TweenInfo.new(0.25), {BackgroundTransparency = 1}):Play()
+                TweenService:Create(Stroke,    TweenInfo.new(0.25), {Transparency = 1}):Play()
+                TweenService:Create(Content,   TweenInfo.new(0.25), {GroupTransparency = 1}):Play()
+                task.wait(0.3); MainFrame.Visible = false
+            end
+        end
+    end)
+
+    -- ===== OPEN ANIMATION =====
+    task.spawn(function()
+        TweenService:Create(HelloLabel, TweenInfo.new(1.1, Enum.EasingStyle.Quint), {TextTransparency = 0}):Play()
+        task.wait(1.7)
+        TweenService:Create(HelloLabel, TweenInfo.new(0.7), {TextTransparency = 1}):Play()
+        task.wait(0.75)
+        HelloLabel.Visible = false
+        Content.Visible = true
+        TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {BackgroundTransparency = 0}):Play()
+        TweenService:Create(Stroke,    TweenInfo.new(0.5), {Transparency = 0}):Play()
+        TweenService:Create(Content,   TweenInfo.new(0.5), {GroupTransparency = 0}):Play()
+    end)
+end
+
+-- ==================== KEY SUBMIT ====================
+SubmitBtn.MouseButton1Click:Connect(function()
+    if KeyInput.Text == CorrectKey then
+        KeyStatus.Text = "ACCESS GRANTED ✓"
+        KeyStatus.TextColor3 = Color3.fromRGB(160, 255, 140)
+        task.wait(0.8)
+        KeyFrame:Destroy()
+        CreateMainGUI()
+    else
+        KeyStatus.Text = "INVALID KEY"
+        KeyStatus.TextColor3 = Color3.fromRGB(255, 90, 90)
+        TweenService:Create(KeyFrame, TweenInfo.new(0.06, Enum.EasingStyle.Bounce), {}):Play()
+        task.wait(1.5); KeyStatus.Text = ""
+    end
+end)
+
+KeyInput.FocusLost:Connect(function(enter)
+    if enter and KeyInput.Text == CorrectKey then SubmitBtn:Click() end
+end)
