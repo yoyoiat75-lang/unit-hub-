@@ -1,5 +1,5 @@
 -- ╔══════════════════════════════════════════════════════════════════════╗
--- ║         UNIT HUB  v5.4  —  Windows 11 Theme                        ║
+-- ║         UNIT HUB  v5.6  —  Windows 11 Theme                        ║
 -- ║  Tabs: ESP · WORLD · PLAYER · UTILS · LOG                          ║
 -- ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -8,6 +8,7 @@ local TS   = game:GetService("TweenService")
 local RS   = game:GetService("RunService")
 local PLR  = game:GetService("Players")
 local UIS  = game:GetService("UserInputService")
+local PFS  = game:GetService("PathfindingService")
 local LP   = PLR.LocalPlayer
 local RS_S = game:GetService("ReplicatedStorage")
 
@@ -21,15 +22,12 @@ end)
 -- ================================================================
 --  CONSTANTS
 -- ================================================================
-local VERSION    = "5.4"
+local VERSION    = "5.6"
 local OWNER_NAME = "powenp99087"
 local function isOwner() return LP.Name == OWNER_NAME end
 
 -- ================================================================
 --  IMAGE ENTITIES  (Alex + Angry Munci only)
---  These are 2D billboard sprites — no 3D mesh, can't be highlighted.
---  Detection watches the Entities folder via DescendantAdded events
---  rather than polling GetDescendants() every frame.
 -- ================================================================
 local IMAGE_ENTITIES = {
     { pattern = "alex",       label = "ALEX",        color = Color3.fromRGB(220, 48,  48) },
@@ -37,8 +35,8 @@ local IMAGE_ENTITIES = {
     { pattern = "munci",      label = "ANGRY MUNCI", color = Color3.fromRGB(255, 118,   0) },
 }
 
-local imageEntityAlerted = {}   -- pattern → tick of last alert
-local ALERT_RANGE        = 80   -- studs before banner fires
+local imageEntityAlerted = {}
+local ALERT_RANGE        = 80
 
 local function matchImageEntity(name)
     local low = name:lower():gsub("%s+","")
@@ -48,12 +46,13 @@ local function matchImageEntity(name)
 end
 
 -- ================================================================
---  WIN11 PALETTE  (cleaner — reduced colour count)
+--  WIN11 PALETTE
 -- ================================================================
 local W = {
     bg         = Color3.fromRGB(18, 18, 26),
     surface    = Color3.fromRGB(28, 28, 38),
     surfaceUp  = Color3.fromRGB(36, 36, 50),
+    surfaceAlt = Color3.fromRGB(24, 24, 34),   -- NEW: alternating row tint
     sep        = Color3.fromRGB(46, 46, 62),
     accent     = Color3.fromRGB(0,  112, 224),
     accentHov  = Color3.fromRGB(28, 138, 248),
@@ -67,27 +66,32 @@ local W = {
     warn       = Color3.fromRGB(196, 126,   0),
     pillOff    = Color3.fromRGB(46,   46,  62),
     gold       = Color3.fromRGB(255, 208,  56),
+    teal       = Color3.fromRGB(0,   188, 188),
 }
 
 -- ================================================================
 --  FLAGS
 -- ================================================================
 local F = {
-    EntityESP    = false,
-    EntityChams  = false,
-    PlayerESP    = false,
-    ScrapESP     = false,
-    CorpseESP    = false,
-    FullBright   = false,
-    NoFog        = false,
-    Noclip       = false,
-    AutoSafe     = false,
-    AntiAFK      = false,
-    ImageAlert   = true,
-    SpeedMult    = 1,
-    SafeHP       = 30,
-    SafeCooldown = false,
-    OrigSpeed    = 16,
+    EntityESP       = false,
+    EntityChams     = false,
+    PlayerESP       = false,
+    ScrapESP        = false,
+    CorpseESP       = false,
+    ControlPointESP = false,
+    FullBright      = false,
+    NoFog           = false,
+    Noclip          = false,
+    AutoSafe        = false,
+    AntiAFK         = false,
+    ImageAlert      = true,
+    PathfindScrap   = false,
+    SpeedMult       = 1,
+    SafeHP          = 30,
+    SafeCooldown    = false,
+    OrigSpeed       = 16,
+    -- v5.6: configurable sprint duration (seconds)
+    SprintDuration  = 15,
 }
 
 -- ================================================================
@@ -95,7 +99,7 @@ local F = {
 -- ================================================================
 pcall(function()
     for _, v in ipairs(RS_S:GetChildren()) do
-        if v.Name:match("^UH_v[45]_user_") then v:Destroy() end
+        if v.Name:match("^UH_v[456]_user_") then v:Destroy() end
     end
     local tag = Instance.new("StringValue")
     tag.Name = "UH_v5_user_"..LP.UserId; tag.Value = LP.Name.."|"..VERSION; tag.Parent = RS_S
@@ -162,14 +166,9 @@ local function applySpeed()
 end
 
 -- ================================================================
---  ENTITY CACHE  ← event-driven, no per-frame GetDescendants
---
---  Instead of calling ef:GetDescendants() every 0.5s (which locks the
---  main thread while Luau traverses the whole tree), we keep a live
---  set by connecting to DescendantAdded / DescendantRemoving once.
---  The ESP / chams / alert logic then just iterates this small table.
+--  ENTITY CACHE  ← event-driven
 -- ================================================================
-local entityCache  = {}   -- [model] = {pp=BasePart, name=string}
+local entityCache  = {}
 local entityCount  = 0
 
 local function cacheAdd(d)
@@ -187,12 +186,10 @@ local function cacheRemove(d)
     end
 end
 
--- Connect to Entities folder when it appears
 local entitiesFolder = workspace:FindFirstChild("Entities")
 
 local function hookEntitiesFolder(ef)
     if not ef then return end
-    -- seed existing
     for _,d in ipairs(ef:GetDescendants()) do cacheAdd(d) end
     ef.DescendantAdded:Connect(cacheAdd)
     ef.DescendantRemoving:Connect(cacheRemove)
@@ -206,7 +203,7 @@ if not entitiesFolder then
 end
 
 -- ================================================================
---  SCRAP / CORPSE CACHES (same pattern — event-driven)
+--  SCRAP / CORPSE CACHES
 -- ================================================================
 local scrapCache   = {}
 local corpseCache  = {}
@@ -249,6 +246,241 @@ workspace.ChildAdded:Connect(function(c)
 end)
 
 -- ================================================================
+--  CONTROL POINT CACHE  ← event-driven, watches Round folder
+-- ================================================================
+local cpCache    = {}
+local cpCount    = 0
+local cpDetected = false
+local cpESPToggleFn = nil
+
+local function cpAdd(d)
+    if not (d:IsA("BasePart") or d:IsA("Model")) then return end
+    if d.Name ~= "ControlPoint" then return end
+    if cpCache[d] then return end
+    cpCache[d] = true
+    cpCount += 1
+    if not cpDetected then
+        cpDetected = true
+        if cpESPToggleFn then
+            cpESPToggleFn(true)
+            F.ControlPointESP = true
+        end
+    end
+end
+
+local function cpRemove(d)
+    if cpCache[d] then
+        cpCache[d] = nil
+        cpCount = math.max(0, cpCount - 1)
+    end
+end
+
+local function hookRoundFolder(roundFolder)
+    if not roundFolder then return end
+    for _, d in ipairs(roundFolder:GetDescendants()) do cpAdd(d) end
+    roundFolder.DescendantAdded:Connect(cpAdd)
+    roundFolder.DescendantRemoving:Connect(cpRemove)
+end
+
+local function tryHookRound()
+    local mf = workspace:FindFirstChild("MapFolder")
+    if not mf then return end
+    local rnd = mf:FindFirstChild("Round")
+    if rnd then
+        hookRoundFolder(rnd)
+    else
+        mf.ChildAdded:Connect(function(c)
+            if c.Name == "Round" then hookRoundFolder(c) end
+        end)
+    end
+end
+
+tryHookRound()
+workspace.ChildAdded:Connect(function(c)
+    if c.Name == "MapFolder" then
+        task.wait(0.5)
+        tryHookRound()
+    end
+end)
+
+-- ================================================================
+--  PATHFINDING SCRAP SYSTEM  (v5.6: longer sprint)
+-- ================================================================
+local pfActive     = false
+local pfThread     = nil
+local SPRINT_SPEED = 28    -- v5.6: was 24
+local NORMAL_SPEED = 16
+
+local function getEntityPositions()
+    local positions = {}
+    for model, data in pairs(entityCache) do
+        if data.pp then table.insert(positions, data.pp.Position) end
+    end
+    return positions
+end
+
+local function getNearestScrap()
+    local hrp = getHRP(); if not hrp then return nil end
+    local debrisMap = workspace:FindFirstChild("Debris")
+        and workspace.Debris:FindFirstChild("Map")
+    if not debrisMap then return nil end
+    local scrapFolder = debrisMap:FindFirstChild("Scrap")
+    if not scrapFolder then return nil end
+
+    local nearest, nearestDist = nil, math.huge
+    for _, obj in ipairs(scrapFolder:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            local pos
+            if obj:IsA("BasePart") then
+                pos = obj.Position
+            elseif obj:IsA("Model") and obj.PrimaryPart then
+                pos = obj.PrimaryPart.Position
+            end
+            if pos then
+                local d = (hrp.Position - pos).Magnitude
+                if d < nearestDist then nearestDist = d; nearest = obj end
+            end
+        end
+    end
+    return nearest, nearestDist
+end
+
+local ENTITY_AVOID_RADIUS = 20
+local function isTooCloseToEntity(pos)
+    for model, data in pairs(entityCache) do
+        if data.pp then
+            if (pos - data.pp.Position).Magnitude < ENTITY_AVOID_RADIUS then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local ivPFStatus    -- assigned after widget build
+local ivPFSprint    -- NEW: sprint timer display label
+
+local function stopPathfinding(reason)
+    pfActive = false
+    if pfThread then task.cancel(pfThread); pfThread = nil end
+    local hum = getHum()
+    if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+    if ivPFStatus then ivPFStatus.Text = reason or "idle" end
+    if ivPFSprint then ivPFSprint.Text = "—" end
+end
+
+local function runPathfindingLoop()
+    pfActive = true
+    local hum = getHum()
+    local hrp = getHRP()
+    if not hum or not hrp then stopPathfinding("no char"); return end
+
+    while F.PathfindScrap and pfActive do
+        hrp = getHRP(); hum = getHum()
+        if not hrp or not hum then stopPathfinding("no char"); break end
+
+        if isTooCloseToEntity(hrp.Position) then
+            if ivPFStatus then ivPFStatus.Text = "⚠ Entity near — waiting" end
+            if ivPFSprint then ivPFSprint.Text = "—" end
+            task.wait(1)
+            continue
+        end
+
+        local target, dist = getNearestScrap()
+        if not target then
+            if ivPFStatus then ivPFStatus.Text = "no scrap found" end
+            if ivPFSprint then ivPFSprint.Text = "—" end
+            task.wait(2)
+            continue
+        end
+
+        local targetPos
+        if target:IsA("BasePart") then
+            targetPos = target.Position
+        elseif target:IsA("Model") and target.PrimaryPart then
+            targetPos = target.PrimaryPart.Position
+        else
+            task.wait(0.5); continue
+        end
+
+        if isTooCloseToEntity(targetPos) then
+            if ivPFStatus then ivPFStatus.Text = "⚠ Entity on path — skipping" end
+            task.wait(1.5)
+            continue
+        end
+
+        local agentParams = { AgentHeight = 5, AgentRadius = 2, AgentCanJump = true }
+        local path = PFS:CreatePath(agentParams)
+        local ok, err = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
+
+        if not ok or path.Status == Enum.PathStatus.NoPath then
+            if ivPFStatus then ivPFStatus.Text = "no path — skipping" end
+            task.wait(1)
+            continue
+        end
+
+        local waypoints = path:GetWaypoints()
+        if #waypoints == 0 then task.wait(0.5); continue end
+
+        hum.WalkSpeed = SPRINT_SPEED
+        local sprintStart = tick()
+        local sprintMax   = F.SprintDuration   -- v5.6: use configurable value
+        local sprintExpired = false
+
+        if ivPFStatus then
+            ivPFStatus.Text = "→ scrap  "..math.floor(dist).." st"
+        end
+
+        -- Sprint countdown ticker (runs alongside waypoint loop)
+        local countdownActive = true
+        task.spawn(function()
+            while countdownActive and pfActive and F.PathfindScrap do
+                local elapsed = tick() - sprintStart
+                local remaining = math.max(0, sprintMax - elapsed)
+                if ivPFSprint then
+                    if remaining > 0 then
+                        ivPFSprint.Text = "sprint  "..string.format("%.1f", remaining).."s"
+                    else
+                        ivPFSprint.Text = "walking"
+                    end
+                end
+                task.wait(0.1)
+            end
+            if ivPFSprint then ivPFSprint.Text = "—" end
+        end)
+
+        for _, wp in ipairs(waypoints) do
+            if not F.PathfindScrap or not pfActive then break end
+            hrp = getHRP(); hum = getHum()
+            if not hrp or not hum then break end
+
+            if isTooCloseToEntity(hrp.Position) then
+                hum:MoveTo(hrp.Position)
+                if ivPFStatus then ivPFStatus.Text = "⚠ Entity mid-path — abort" end
+                task.wait(2)
+                break
+            end
+
+            if tick() - sprintStart >= sprintMax then
+                hum.WalkSpeed = F.OrigSpeed * F.SpeedMult
+                sprintExpired = true
+            end
+
+            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+            hum:MoveTo(wp.Position)
+            local moved = hum.MoveToFinished:Wait()
+            if not moved then break end
+        end
+
+        countdownActive = false
+        if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+        task.wait(0.3)
+    end
+
+    stopPathfinding("stopped")
+end
+
+-- ================================================================
 --  SCREEN GUI
 -- ================================================================
 local SG = Instance.new("ScreenGui")
@@ -256,24 +488,23 @@ SG.Name="UnitHubV5"; SG.Parent=game:GetService("CoreGui")
 SG.ResetOnSpawn=false; SG.IgnoreGuiInset=true; SG.DisplayOrder=999
 
 -- ================================================================
---  MAIN FRAME  500 × 540  (slightly narrower — cleaner)
+--  MAIN FRAME  500 × 580  (v5.6: +20 for sprint slider row)
 -- ================================================================
 local Main = Instance.new("Frame",SG)
-Main.Name="Main"; Main.Size=UDim2.new(0,500,0,540)
-Main.Position=UDim2.new(0.5,-250,0.5,-270)
+Main.Name="Main"; Main.Size=UDim2.new(0,500,0,580)
+Main.Position=UDim2.new(0.5,-250,0.5,-290)
 Main.BackgroundColor3=W.bg; Main.BorderSizePixel=0
 Main.Active=true; Main.Draggable=true; Main.ClipsDescendants=true
 Instance.new("UICorner",Main).CornerRadius=UDim.new(0,12)
 local MainStroke=Instance.new("UIStroke",Main)
 MainStroke.Color=Color3.fromRGB(52,52,72); MainStroke.Thickness=1
 
--- Mica overlay (subtle purple tint top-third)
 local Mica=Instance.new("Frame",Main)
 Mica.Size=UDim2.new(1,0,0.36,0); Mica.BackgroundColor3=Color3.fromRGB(28,22,52)
 Mica.BackgroundTransparency=0.82; Mica.BorderSizePixel=0; Mica.ZIndex=0
 Instance.new("UICorner",Mica).CornerRadius=UDim.new(0,12)
 
--- Top accent bar — smooth blue→purple
+-- ── ANIMATED TOP BAR ─────────────────────────────────────────
 local TopBar=Instance.new("Frame",Main)
 TopBar.Size=UDim2.new(1,0,0,3); TopBar.BorderSizePixel=0
 TopBar.BackgroundColor3=W.accent
@@ -289,17 +520,15 @@ task.spawn(function()
     local r=0; while true do r=(r+0.22)%360; TG.Rotation=r; task.wait(0.04) end
 end)
 
--- ── TITLE BAR  h=48 ──────────────────────────────────────────
+-- ── TITLE BAR ────────────────────────────────────────────────
 local TitleBar=Instance.new("Frame",Main)
 TitleBar.Size=UDim2.new(1,0,0,48); TitleBar.Position=UDim2.new(0,0,0,3)
 TitleBar.BackgroundColor3=Color3.fromRGB(20,18,32); TitleBar.BorderSizePixel=0; TitleBar.ZIndex=2
 local TBC=Instance.new("UICorner",TitleBar); TBC.CornerRadius=UDim.new(0,12)
--- mask bottom round corners of title bar
 local TBMask=Instance.new("Frame",TitleBar)
 TBMask.Size=UDim2.new(1,0,0,12); TBMask.Position=UDim2.new(0,0,1,-12)
 TBMask.BackgroundColor3=Color3.fromRGB(20,18,32); TBMask.BorderSizePixel=0
 
--- App icon
 local AppIcon=Instance.new("Frame",TitleBar)
 AppIcon.Size=UDim2.new(0,26,0,26); AppIcon.Position=UDim2.new(0,14,0.5,-13)
 AppIcon.BackgroundColor3=W.accent; AppIcon.BorderSizePixel=0; AppIcon.ZIndex=3
@@ -317,17 +546,33 @@ if isOwner() then
     cL.BackgroundTransparency=1; cL.Text="👑"; cL.TextSize=8; cL.ZIndex=5
 end
 
--- Title + version chip
 local TitleL=Instance.new("TextLabel",TitleBar)
 TitleL.Size=UDim2.new(0,140,0,19); TitleL.Position=UDim2.new(0,47,0,7)
 TitleL.BackgroundTransparency=1; TitleL.Text="Unit Hub"
 TitleL.TextColor3=W.txtPri; TitleL.Font=Enum.Font.GothamSemibold
 TitleL.TextSize=13; TitleL.TextXAlignment=Enum.TextXAlignment.Left; TitleL.ZIndex=3
 
+-- v5.6: Version chip with gradient outline (UIStroke + UIGradient via frame border)
 local VerChip=Instance.new("Frame",TitleBar)
 VerChip.Size=UDim2.new(0,40,0,15); VerChip.Position=UDim2.new(0,112,0,8)
 VerChip.BackgroundColor3=W.surfaceUp; VerChip.BorderSizePixel=0; VerChip.ZIndex=3
 Instance.new("UICorner",VerChip).CornerRadius=UDim.new(0,4)
+local VerChipStroke=Instance.new("UIStroke",VerChip)
+VerChipStroke.Color=W.accent; VerChipStroke.Thickness=1
+-- Animate version chip outline to pulse between accent and accentPurp
+task.spawn(function()
+    local t=0
+    while true do
+        t=(t+0.04)%1
+        local r=math.sin(t*math.pi*2)*0.5+0.5
+        VerChipStroke.Color=Color3.fromRGB(
+            math.floor(W.accent.R*255*(1-r)+W.accentPurp.R*255*r),
+            math.floor(W.accent.G*255*(1-r)+W.accentPurp.G*255*r),
+            math.floor(W.accent.B*255*(1-r)+W.accentPurp.B*255*r)
+        )
+        task.wait(0.05)
+    end
+end)
 local VCL=Instance.new("TextLabel",VerChip)
 VCL.Size=UDim2.new(1,0,1,0); VCL.BackgroundTransparency=1; VCL.Text="v"..VERSION
 VCL.TextColor3=W.txtSec; VCL.Font=Enum.Font.Gotham; VCL.TextSize=9; VCL.ZIndex=4
@@ -343,7 +588,6 @@ if isOwner() then
     oL.TextColor3=W.gold; oL.Font=Enum.Font.GothamBold; oL.TextSize=8; oL.ZIndex=4
 end
 
--- Status chip (right)
 local StatusChip=Instance.new("Frame",TitleBar)
 StatusChip.Size=UDim2.new(0,64,0,18); StatusChip.Position=UDim2.new(1,-164,0.5,-9)
 StatusChip.BackgroundColor3=Color3.fromRGB(12,32,12); StatusChip.BorderSizePixel=0; StatusChip.ZIndex=3
@@ -357,7 +601,6 @@ SCL.Size=UDim2.new(1,-16,1,0); SCL.Position=UDim2.new(0,15,0,0)
 SCL.BackgroundTransparency=1; SCL.Text="Active"
 SCL.TextColor3=Color3.fromRGB(18,205,18); SCL.Font=Enum.Font.GothamSemibold; SCL.TextSize=9; SCL.ZIndex=4
 
--- HP bar (right)
 local HPLbl=Instance.new("TextLabel",TitleBar)
 HPLbl.Size=UDim2.new(0,90,0,12); HPLbl.Position=UDim2.new(1,-102,0,8)
 HPLbl.BackgroundTransparency=1; HPLbl.Text="HP  —"
@@ -377,7 +620,7 @@ TBSep.Size=UDim2.new(1,0,0,1); TBSep.Position=UDim2.new(0,0,0,51)
 TBSep.BackgroundColor3=W.sep; TBSep.BorderSizePixel=0
 
 -- ================================================================
---  IMAGE-ENTITY ALERT BANNER  (slides in from top, outside hub)
+--  ALERT BANNER
 -- ================================================================
 local AlertBanner=Instance.new("Frame",SG)
 AlertBanner.Size=UDim2.new(0,320,0,52); AlertBanner.AnchorPoint=Vector2.new(0.5,0)
@@ -417,7 +660,6 @@ local alertHideTask = nil
 local alertShowing  = false
 
 local function showAlert(label, dist, col)
-    -- tint banner to entity colour
     local r,g,b = math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255)
     local function dim(v) return math.max(0, math.floor(v*0.55)) end
     AlertBanner.BackgroundColor3 = Color3.fromRGB(dim(r), dim(g), dim(b))
@@ -426,29 +668,25 @@ local function showAlert(label, dist, col)
         ColorSequenceKeypoint.new(0, Color3.fromRGB(math.min(255,math.floor(r*0.65)), math.min(255,math.floor(g*0.32)), math.min(255,math.floor(b*0.32)))),
         ColorSequenceKeypoint.new(1, Color3.fromRGB(math.min(255,math.floor(r*0.36)), math.min(255,math.floor(g*0.18)), math.min(255,math.floor(b*0.18)))),
     }
-    ATitle.Text      = "⚠  "..label.." NEARBY"
+    ATitle.Text       = "⚠  "..label.." NEARBY"
     ATitle.TextColor3 = col
-    ASub.Text        = "Image entity  ·  "..math.floor(dist).." studs away"
-    ASub.TextColor3  = Color3.fromRGB(
+    ASub.Text         = "Image entity  ·  "..math.floor(dist).." studs away"
+    ASub.TextColor3   = Color3.fromRGB(
         math.min(255, math.floor(r*0.9+120)),
         math.min(255, math.floor(g*0.5+100)),
         math.min(255, math.floor(b*0.5+100))
     )
-
     if not alertShowing then
         alertShowing = true
         AlertBanner.Visible = true
         tw(AlertBanner, 0.20, {Position=UDim2.new(0.5,0,0,12)})
     end
-
-    -- pulse border twice
     task.spawn(function()
         for _=1,2 do
             tw(AStroke,0.15,{Transparency=0.75}); task.wait(0.2)
             tw(AStroke,0.15,{Transparency=0});    task.wait(0.2)
         end
     end)
-
     if alertHideTask then task.cancel(alertHideTask) end
     alertHideTask = task.delay(4.5, function()
         tw(AlertBanner, 0.20, {Position=UDim2.new(0.5,0,-0.18,0)})
@@ -461,8 +699,14 @@ local NotifStrip=Instance.new("Frame",Main)
 NotifStrip.Size=UDim2.new(1,0,0,0); NotifStrip.Position=UDim2.new(0,0,0,52)
 NotifStrip.BackgroundColor3=Color3.fromRGB(0,50,104); NotifStrip.BorderSizePixel=0
 NotifStrip.ClipsDescendants=true; NotifStrip.ZIndex=8
+
+-- v5.6: Left accent flash bar on notification strip
+local NotifAccentBar=Instance.new("Frame",NotifStrip)
+NotifAccentBar.Size=UDim2.new(0,3,1,0); NotifAccentBar.Position=UDim2.new(0,0,0,0)
+NotifAccentBar.BackgroundColor3=W.accent; NotifAccentBar.BorderSizePixel=0; NotifAccentBar.ZIndex=10
+
 local NotifTxt=Instance.new("TextLabel",NotifStrip)
-NotifTxt.Size=UDim2.new(1,-14,1,0); NotifTxt.Position=UDim2.new(0,10,0,0)
+NotifTxt.Size=UDim2.new(1,-18,1,0); NotifTxt.Position=UDim2.new(0,14,0,0)
 NotifTxt.BackgroundTransparency=1; NotifTxt.Text=""
 NotifTxt.TextColor3=Color3.fromRGB(196,224,255); NotifTxt.Font=Enum.Font.GothamSemibold
 NotifTxt.TextSize=10; NotifTxt.TextXAlignment=Enum.TextXAlignment.Left; NotifTxt.ZIndex=9
@@ -476,20 +720,25 @@ local function notify(msg, color)
         while #notifQ>0 do
             local n=table.remove(notifQ,1)
             NotifTxt.Text="  "..n.msg; NotifTxt.TextColor3=n.col
-            NotifStrip.BackgroundColor3=
+            local bgCol =
                 n.col==W.danger  and Color3.fromRGB(64,8,8)   or
                 n.col==W.success and Color3.fromRGB(6,32,6)   or
+                n.col==W.teal    and Color3.fromRGB(0,32,36)  or
                 Color3.fromRGB(0,46,96)
+            NotifStrip.BackgroundColor3=bgCol
+            -- v5.6: flash the accent bar to match notif color
+            tw(NotifAccentBar,0.08,{BackgroundColor3=n.col})
             tw(NotifStrip,0.13,{Size=UDim2.new(1,0,0,20)})
             task.wait(2.6)
             tw(NotifStrip,0.13,{Size=UDim2.new(1,0,0,0)})
+            tw(NotifAccentBar,0.13,{BackgroundColor3=W.accent})
             task.wait(0.16)
         end
         notifBusy=false
     end)
 end
 
--- ── TAB BAR  h=36 ────────────────────────────────────────────
+-- ── TAB BAR ──────────────────────────────────────────────────
 local TabBar=Instance.new("Frame",Main)
 TabBar.Size=UDim2.new(1,0,0,36); TabBar.Position=UDim2.new(0,0,0,52)
 TabBar.BackgroundColor3=W.bg; TabBar.BorderSizePixel=0; TabBar.ZIndex=2
@@ -576,28 +825,60 @@ local function getPage(n)
     for _,t in ipairs(tabs) do if t.n==n then return t.page end end
 end
 
+-- v5.6: Section header with gradient pill accent bar
 local function sec(page,text)
     local f=Instance.new("Frame",page)
     f.Size=UDim2.new(1,0,0,22); f.BackgroundTransparency=1; f.BorderSizePixel=0
-    local acc=Instance.new("Frame",f)
-    acc.Size=UDim2.new(0,2,0,13); acc.Position=UDim2.new(0,0,0.5,-6.5)
-    acc.BackgroundColor3=W.accent; acc.BorderSizePixel=0
-    Instance.new("UICorner",acc).CornerRadius=UDim.new(1,0)
-    local ag=Instance.new("UIGradient",acc)
-    ag.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
-    ag.Rotation=90
+
+    -- Gradient pill (wider, more visible)
+    local pill=Instance.new("Frame",f)
+    pill.Size=UDim2.new(0,3,0,14); pill.Position=UDim2.new(0,0,0.5,-7)
+    pill.BackgroundColor3=W.accent; pill.BorderSizePixel=0
+    Instance.new("UICorner",pill).CornerRadius=UDim.new(1,0)
+    local pg=Instance.new("UIGradient",pill)
+    pg.Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0, W.accent),
+        ColorSequenceKeypoint.new(1, W.accentPurp),
+    }
+    pg.Rotation=90
+
+    -- Faint glow line extending from the pill
+    local glowLine=Instance.new("Frame",f)
+    glowLine.Size=UDim2.new(1,-14,0,1); glowLine.Position=UDim2.new(0,8,0.5,0)
+    glowLine.BackgroundColor3=W.sep; glowLine.BorderSizePixel=0
+    Instance.new("UIGradient",glowLine).Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(60,60,90)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(28,28,38)),
+    }
+
     local lbl=Instance.new("TextLabel",f)
-    lbl.Size=UDim2.new(1,0,1,0); lbl.Position=UDim2.new(0,9,0,0)
+    lbl.Size=UDim2.new(1,0,1,0); lbl.Position=UDim2.new(0,10,0,0)
     lbl.BackgroundTransparency=1; lbl.Text=text:upper()
-    lbl.TextColor3=W.txtHint; lbl.Font=Enum.Font.GothamBold; lbl.TextSize=9
-    lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.TextColor3=Color3.fromRGB(100,100,128); lbl.Font=Enum.Font.GothamBold; lbl.TextSize=9
+    lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=2
 end
 
+-- v5.6: tog — left-border glow when active
+local togIndex = 0
 local function tog(page,label,desc,cb,broken)
+    togIndex = togIndex + 1
+    local isAlt = (togIndex % 2 == 0)
+
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,54); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    row.Size=UDim2.new(1,0,0,54); row.BorderSizePixel=0
+    row.BackgroundColor3= isAlt and W.surfaceAlt or W.surface
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     local rs=Instance.new("UIStroke",row); rs.Color=W.sep; rs.Thickness=1
+
+    -- v5.6: left accent border (hidden by default, visible when active)
+    local leftBar=Instance.new("Frame",row)
+    leftBar.Size=UDim2.new(0,3,0.6,0); leftBar.Position=UDim2.new(0,0,0.2,0)
+    leftBar.BackgroundColor3=W.accent; leftBar.BorderSizePixel=0; leftBar.BackgroundTransparency=1; leftBar.ZIndex=3
+    Instance.new("UICorner",leftBar).CornerRadius=UDim.new(1,0)
+    local lbG=Instance.new("UIGradient",leftBar)
+    lbG.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
+    lbG.Rotation=90
+
     local hov=Instance.new("Frame",row); hov.Size=UDim2.new(1,0,1,0)
     hov.BackgroundTransparency=1; hov.BorderSizePixel=0; hov.ZIndex=1
     Instance.new("UICorner",hov).CornerRadius=UDim.new(0,8)
@@ -632,10 +913,13 @@ local function tog(page,label,desc,cb,broken)
             tw(track,0.16,{BackgroundColor3=W.accent}); tw(trkS,0.16,{Color=W.accentHov})
             tw(thumb,0.16,{Position=UDim2.new(0,21,0.5,-7),BackgroundColor3=Color3.new(1,1,1)})
             tw(rs,0.16,{Color=W.accent}); tw(row,0.16,{BackgroundColor3=Color3.fromRGB(12,16,38)})
+            tw(leftBar,0.16,{BackgroundTransparency=0})   -- v5.6: show left glow
         else
             tw(track,0.16,{BackgroundColor3=W.pillOff}); tw(trkS,0.16,{Color=Color3.fromRGB(84,84,108)})
             tw(thumb,0.16,{Position=UDim2.new(0,3,0.5,-7),BackgroundColor3=Color3.fromRGB(172,172,195)})
-            tw(rs,0.16,{Color=W.sep}); tw(row,0.16,{BackgroundColor3=W.surface})
+            tw(rs,0.16,{Color=W.sep})
+            tw(row,0.16,{BackgroundColor3= isAlt and W.surfaceAlt or W.surface})
+            tw(leftBar,0.16,{BackgroundTransparency=1})   -- v5.6: hide left glow
         end
     end
 
@@ -713,19 +997,29 @@ local function sld(page,label,desc,minV,maxV,def,cb)
     hb.MouseButton1Click:Connect(function() upd(UIS:GetMouseLocation().X) end)
 end
 
+-- v5.6: inf rows with alternating tint support
+local infIndex = 0
 local function inf(page,label)
+    infIndex = infIndex + 1
+    local isAlt = (infIndex % 2 == 0)
+
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,36); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    row.Size=UDim2.new(1,0,0,36)
+    row.BackgroundColor3= isAlt and W.surfaceAlt or W.surface
+    row.BorderSizePixel=0
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     Instance.new("UIStroke",row).Color=W.sep
+
     local lbl=Instance.new("TextLabel",row)
     lbl.Size=UDim2.new(0.52,0,1,0); lbl.Position=UDim2.new(0,13,0,0)
     lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=W.txtHint
     lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+
     local vl=Instance.new("TextLabel",row)
     vl.Size=UDim2.new(0.44,0,1,0); vl.Position=UDim2.new(0.52,0,0,0)
     vl.BackgroundTransparency=1; vl.Text="—"; vl.TextColor3=W.txtPri
     vl.Font=Enum.Font.GothamSemibold; vl.TextSize=11; vl.TextXAlignment=Enum.TextXAlignment.Right
+
     return vl
 end
 
@@ -745,7 +1039,6 @@ local function actbtn(page,label,desc,btnTxt,color,cb)
         dl.Font=Enum.Font.Gotham; dl.TextSize=9; dl.TextXAlignment=Enum.TextXAlignment.Left
     end
     local c=color or W.accent
-    local cD=Color3.fromRGB(math.max(0,c.R*255-28),math.max(0,c.G*255-28),math.max(0,c.B*255-28))
     local ab=Instance.new("TextButton",row)
     ab.Size=UDim2.new(0,84,0,28); ab.Position=UDim2.new(1,-96,0.5,-14)
     ab.BackgroundColor3=c; ab.Text=btnTxt; ab.TextColor3=Color3.new(1,1,1)
@@ -754,7 +1047,7 @@ local function actbtn(page,label,desc,btnTxt,color,cb)
     ab.MouseEnter:Connect(function() tw(ab,0.1,{BackgroundColor3=Color3.fromRGB(math.min(255,c.R*255+16),math.min(255,c.G*255+16),math.min(255,c.B*255+16))}) end)
     ab.MouseLeave:Connect(function() tw(ab,0.1,{BackgroundColor3=c}) end)
     ab.MouseButton1Click:Connect(function()
-        tw(ab,0.07,{BackgroundColor3=cD})
+        tw(ab,0.07,{BackgroundColor3=Color3.fromRGB(math.max(0,c.R*255-28),math.max(0,c.G*255-28),math.max(0,c.B*255-28))})
         task.delay(0.16,function() tw(ab,0.12,{BackgroundColor3=c}) end)
         cb()
     end)
@@ -820,7 +1113,6 @@ tog(EP,"Entity Chams","Wall-visible highlight on all entity models",function(v)
 end)
 
 sec(EP,"Image Entities  (2D sprites)")
--- Info card
 local imgCard=Instance.new("Frame",EP)
 imgCard.Size=UDim2.new(1,0,0,40); imgCard.BackgroundColor3=Color3.fromRGB(32,18,8)
 imgCard.BorderSizePixel=0
@@ -839,7 +1131,39 @@ tog(EP,"Image Entity Alerts","Banner + notify when Alex or Angry Munci is near",
 end)
 
 sec(EP,"Characters")
-tog(EP,"NPC ESP  ⚠ Not Working","Feature currently broken — no labels appear",function(v) end,true)
+
+-- v5.6: NPC ESP — cleaner broken indicator card
+local npcBrokenCard=Instance.new("Frame",EP)
+npcBrokenCard.Size=UDim2.new(1,0,0,50); npcBrokenCard.BackgroundColor3=Color3.fromRGB(30,20,8)
+npcBrokenCard.BorderSizePixel=0
+Instance.new("UICorner",npcBrokenCard).CornerRadius=UDim.new(0,8)
+local npcBrokenStroke=Instance.new("UIStroke",npcBrokenCard)
+npcBrokenStroke.Color=Color3.fromRGB(120,80,0); npcBrokenStroke.Thickness=1
+
+-- Broken badge
+local npcBadge=Instance.new("Frame",npcBrokenCard)
+npcBadge.Size=UDim2.new(0,52,0,16); npcBadge.Position=UDim2.new(0,12,0,9)
+npcBadge.BackgroundColor3=Color3.fromRGB(100,50,0); npcBadge.BackgroundTransparency=0.5
+npcBadge.BorderSizePixel=0
+Instance.new("UICorner",npcBadge).CornerRadius=UDim.new(0,4)
+local npcBadgeTxt=Instance.new("TextLabel",npcBadge)
+npcBadgeTxt.Size=UDim2.new(1,0,1,0); npcBadgeTxt.BackgroundTransparency=1
+npcBadgeTxt.Text="⚠ BROKEN"; npcBadgeTxt.TextColor3=W.warn
+npcBadgeTxt.Font=Enum.Font.GothamBold; npcBadgeTxt.TextSize=8
+
+local npcTitle=Instance.new("TextLabel",npcBrokenCard)
+npcTitle.Size=UDim2.new(1,-20,0,16); npcTitle.Position=UDim2.new(0,70,0,9)
+npcTitle.BackgroundTransparency=1; npcTitle.Text="NPC ESP"
+npcTitle.TextColor3=W.warn; npcTitle.Font=Enum.Font.GothamSemibold; npcTitle.TextSize=12
+npcTitle.TextXAlignment=Enum.TextXAlignment.Left
+
+local npcDesc=Instance.new("TextLabel",npcBrokenCard)
+npcDesc.Size=UDim2.new(1,-20,0,13); npcDesc.Position=UDim2.new(0,12,0,30)
+npcDesc.BackgroundTransparency=1
+npcDesc.Text="Feature currently non-functional — no labels appear. Toggle has no effect."
+npcDesc.TextColor3=Color3.fromRGB(140,100,40); npcDesc.Font=Enum.Font.Gotham; npcDesc.TextSize=9
+npcDesc.TextWrapped=true; npcDesc.TextXAlignment=Enum.TextXAlignment.Left
+
 tog(EP,"Player ESP","Green highlight + name / dist / HP on all players",function(v)
     F.PlayerESP=v
     if not v then
@@ -858,6 +1182,53 @@ tog(EP,"Corpse ESP","Red highlight on PlayerCorpses",function(v)
             local h=obj:FindFirstChild("CorpseHL"); if h then h:Destroy() end
         end
     end
+end)
+
+-- ── CONTROL POINT ESP ────────────────────────────────────────
+sec(EP,"Control Points")
+
+local cpCard=Instance.new("Frame",EP)
+cpCard.Size=UDim2.new(1,0,0,32); cpCard.BackgroundColor3=Color3.fromRGB(8,26,42)
+cpCard.BorderSizePixel=0
+Instance.new("UICorner",cpCard).CornerRadius=UDim.new(0,8)
+local cpCardStroke=Instance.new("UIStroke",cpCard)
+cpCardStroke.Color=Color3.fromRGB(0,80,160)
+
+-- v5.6: Pulse dot on CP card to show it's actively watching
+local cpPulseDot=Instance.new("Frame",cpCard)
+cpPulseDot.Size=UDim2.new(0,6,0,6); cpPulseDot.Position=UDim2.new(1,-14,0.5,-3)
+cpPulseDot.BackgroundColor3=W.teal; cpPulseDot.BorderSizePixel=0; cpPulseDot.ZIndex=4
+Instance.new("UICorner",cpPulseDot).CornerRadius=UDim.new(1,0)
+task.spawn(function()
+    while true do
+        tw(cpPulseDot,0.5,{BackgroundTransparency=0.7})
+        task.wait(0.55)
+        tw(cpPulseDot,0.5,{BackgroundTransparency=0})
+        task.wait(0.55)
+    end
+end)
+
+local cpCardL=Instance.new("TextLabel",cpCard)
+cpCardL.Size=UDim2.new(1,-26,1,0); cpCardL.Position=UDim2.new(0,10,0,0)
+cpCardL.BackgroundTransparency=1
+cpCardL.Text="Auto-enables when ControlPoint instances are found in MapFolder.Round"
+cpCardL.TextColor3=Color3.fromRGB(80,160,255); cpCardL.Font=Enum.Font.Gotham
+cpCardL.TextSize=9; cpCardL.TextWrapped=true; cpCardL.TextXAlignment=Enum.TextXAlignment.Left
+
+local cpDetectLbl=Instance.new("TextLabel",EP)
+cpDetectLbl.Size=UDim2.new(1,0,0,18); cpDetectLbl.BackgroundTransparency=1
+cpDetectLbl.Text="Watching for Control Points…"; cpDetectLbl.TextColor3=W.txtHint
+cpDetectLbl.Font=Enum.Font.Gotham; cpDetectLbl.TextSize=9
+cpDetectLbl.TextXAlignment=Enum.TextXAlignment.Center
+
+cpESPToggleFn = tog(EP,"Control Point ESP","Teal highlight + label on each ControlPoint",function(v)
+    F.ControlPointESP=v
+    if not v then
+        for obj in pairs(cpCache) do
+            local h=obj:FindFirstChild("CPESP"); if h then h:Destroy() end
+        end
+    end
+    notify(v and "Control Point ESP on" or "Control Point ESP off", v and W.success or W.warn)
 end)
 
 sec(EP,"World")
@@ -908,9 +1279,73 @@ local UTP=getPage("UTILS")
 sec(UTP,"Live Stats")
 local ivHP=inf(UTP,"Local HP")
 local ivEntC=inf(UTP,"Entities (cached)")
+local ivCPCount=inf(UTP,"Control Points")
 local ivMap2=inf(UTP,"Active map")
 local ivSpawnC=inf(UTP,"Spawn parts")
 local ivImgEnt=inf(UTP,"Image entities nearby")
+
+sec(UTP,"Pathfinding")
+ivPFStatus  = inf(UTP,"Scrap pathfind")
+ivPFSprint  = inf(UTP,"Sprint timer")   -- v5.6: live sprint countdown row
+
+-- v5.6: Sprint Duration slider (6–30s, default 15)
+sld(UTP,"Sprint Duration","Seconds to sprint per scrap run  (was 6s → now 15s default)",6,30,15,function(v)
+    F.SprintDuration=v
+end)
+
+tog(UTP,"Pathfinding Scrap","Auto-walks to Debris.Map.Scrap — avoids Entities",function(v)
+    F.PathfindScrap=v
+    if v then
+        notify("Pathfinding Scrap started", W.teal)
+        pfThread = task.spawn(runPathfindingLoop)
+    else
+        stopPathfinding("disabled")
+        notify("Pathfinding Scrap stopped", W.warn)
+    end
+end)
+
+actbtn(UTP,"Run Once","Pathfind to nearest scrap once (no loop)","Run",W.teal,function()
+    if pfActive then notify("Already running", W.warn); return end
+    local hum=getHum(); local hrp=getHRP()
+    if not hum or not hrp then notify("No character", W.danger); return end
+
+    task.spawn(function()
+        local target, dist = getNearestScrap()
+        if not target then notify("No scrap found", W.danger); return end
+
+        local targetPos
+        if target:IsA("BasePart") then targetPos = target.Position
+        elseif target:IsA("Model") and target.PrimaryPart then targetPos = target.PrimaryPart.Position
+        else notify("Invalid scrap target", W.danger); return end
+
+        if isTooCloseToEntity(targetPos) then
+            notify("Entity blocking scrap path", W.warn); return
+        end
+
+        local path = PFS:CreatePath({AgentHeight=5,AgentRadius=2,AgentCanJump=true})
+        local ok = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
+        if not ok or path.Status == Enum.PathStatus.NoPath then
+            notify("No path to scrap", W.danger); return
+        end
+
+        hum.WalkSpeed = SPRINT_SPEED
+        local t0 = tick()
+        local sprintMax = F.SprintDuration   -- v5.6: use configurable duration
+        for _, wp in ipairs(path:GetWaypoints()) do
+            hrp = getHRP(); hum = getHum()
+            if not hrp or not hum then break end
+            if isTooCloseToEntity(hrp.Position) then
+                hum:MoveTo(hrp.Position); notify("Entity nearby — aborted", W.warn); break
+            end
+            if tick()-t0 >= sprintMax then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+            hum:MoveTo(wp.Position)
+            hum.MoveToFinished:Wait()
+        end
+        if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
+        notify("Reached scrap ("..math.floor(dist).." st)", W.success)
+    end)
+end)
 
 sec(UTP,"Misc")
 tog(UTP,"Anti AFK","Prevents idle auto-disconnect",function(v)
@@ -952,57 +1387,109 @@ end
 
 -- ── LOG ───────────────────────────────────────────────────────────
 local CLP=getPage("LOG")
+changeEntry(CLP,"v5.6","Apr 2026",{
+    {"CHANGE","SPRINT_SPEED 24 → 28 (faster sprint to scrap)"},
+    {"ADD",   "Sprint Duration slider (6–30s, default 15s) in UTILS tab"},
+    {"ADD",   "Sprint Timer info row — live countdown while pathfinding"},
+    {"FIX",   "Run Once button now also uses configurable SprintDuration"},
+    {"CHANGE","NPC ESP toggle replaced with cleaner broken-feature card (no dead toggle)"},
+    {"ADD",   "Pulse dot on Control Point watcher card (teal blink)"},
+    {"ADD",   "Animated gradient outline on version chip in title bar"},
+    {"ADD",   "Left-border glow on toggle rows when active (accent→purple)"},
+    {"ADD",   "Alternating row tint on tog/inf widgets for readability"},
+    {"ADD",   "Notification strip left accent flash bar matches notif color"},
+    {"ADD",   "Section headers now have faint glow divider line"},
+    {"CHANGE","Main frame height 560→580 for sprint slider + timer rows"},
+})
+changeEntry(CLP,"v5.5","Apr 2026",{
+    {"ADD",   "Control Point ESP — auto-detects CPs in MapFolder.Round via events"},
+    {"ADD",   "CP toggle auto-enables when first ControlPoint is found in Round"},
+    {"ADD",   "Pathfinding Scrap — walks to Debris.Map.Scrap with sprint"},
+    {"ADD",   "Entity avoidance radius (20 studs) aborts path if entity near"},
+    {"ADD",   "Run Once button — single-trip scrap pathfind without loop"},
+})
 changeEntry(CLP,"v5.4","Apr 2026",{
     {"FIX",   "Screen freeze: replaced GetDescendants() polling with event-driven cache"},
-    {"FIX",   "EntityCache built via DescendantAdded/Removing — zero per-frame scans"},
-    {"FIX",   "ScrapESP + CorpseESP also event-driven — no more 1s full-tree scan"},
-    {"FIX",   "Image entity scanner only looks at Entities folder, not whole workspace"},
-    {"FIX",   "Billboard distance updaters throttled to 0.3s (was 0.15s × N entities)"},
-    {"FIX",   "Speed enforcer: enforcer loop + CharacterAdded + slider cb triple-cover"},
+    {"FIX",   "Image entity scanner only looks at Entities folder"},
     {"CHANGE","Image entities trimmed to Alex + Angry Munci only"},
-    {"CHANGE","UI: smaller, cleaner — 500px wide, reduced padding/font sizes"},
-    {"CHANGE","Section headers: subtler style (grey caps, thin accent bar)"},
-    {"CHANGE","Toggle rows 54px, slider 62px — less vertical waste"},
-    {"CHANGE","Scroll bar thickness 2px — less visual noise"},
-    {"CHANGE","Gradient speed slowed (0.22°/frame) for smoother motion"},
-    {"CHANGE","Alert banner: 2 pulse cycles instead of 3, 4.5s dismiss"},
 })
-changeEntry(CLP,"v5.3","Apr 2026",{
-    {"REMOVE","Global Chat, Player/hub user detector"},
-    {"ADD",   "Image entity alerts (Alex, Angry Munci + others)"},
-    {"FIX",   "Speed hack enforcer loop added"},
-    {"CHANGE","Win11 blue→purple gradient on accents"},
-})
-changeEntry(CLP,"v5.0–5.2","Apr 2026",{
-    {"ADD",   "Win11 theme, Mica, pivot tabs, toggle switches"},
-    {"ADD",   "Owner crown + owner-only controls"},
-    {"ADD",   "MAP tab, CHAT tab (removed in v5.3)"},
-})
-changeEntry(CLP,"v4.0","Apr 2026",{
-    {"ADD",   "USERS tab, notification strip, Corpse ESP"},
-})
-changeEntry(CLP,"v1.0–v3.0","Apr 2026",{
-    {"ADD",   "Entity/Scrap/Player ESP, FullBright, Speed, Noclip"},
-    {"ADD",   "Tab system, HP bar, sliders, Safe Spawn, Anti AFK, Rejoin"},
+changeEntry(CLP,"v5.0–5.3","Apr 2026",{
+    {"ADD",   "Win11 theme, Mica, tabs, owner crown, image entity alerts"},
+    {"ADD",   "Entity/Scrap/Player/Corpse ESP, FullBright, Speed, Noclip"},
 })
 
 -- ================================================================
---  ESP RUNTIME  — uses entityCache, no GetDescendants() polling
+--  CONTROL POINT ESP RUNTIME
+-- ================================================================
+task.spawn(function()
+    while task.wait(0.8) do
+        if cpCount > 0 then
+            cpDetectLbl.Text = cpCount.." Control Point(s) detected in Round"
+            cpDetectLbl.TextColor3 = W.teal
+        else
+            cpDetectLbl.Text = "Watching for Control Points…"
+            cpDetectLbl.TextColor3 = W.txtHint
+        end
+        ivCPCount.Text = tostring(cpCount)
+
+        if not F.ControlPointESP then continue end
+
+        for obj in pairs(cpCache) do
+            if obj.Parent and not obj:FindFirstChild("CPESP") then
+                local h = Instance.new("Highlight", obj)
+                h.Name = "CPESP"; h.FillColor = Color3.fromRGB(0, 200, 200)
+                h.OutlineColor = Color3.fromRGB(80, 255, 255); h.FillTransparency = 0.3
+
+                local anchor = obj:IsA("BasePart") and obj
+                    or (obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")))
+                if anchor then
+                    local bg = Instance.new("BillboardGui", obj)
+                    bg.Name = "CPBILL"; bg.AlwaysOnTop = true
+                    bg.Size = UDim2.new(0, 120, 0, 36); bg.Adornee = anchor
+                    local tl = Instance.new("TextLabel", bg)
+                    tl.BackgroundTransparency = 1; tl.Size = UDim2.new(1, 0, 1, 0)
+                    tl.TextColor3 = Color3.fromRGB(80, 255, 255)
+                    tl.Font = Enum.Font.GothamBold; tl.TextSize = 11
+                    tl.TextStrokeTransparency = 0.1; tl.RichText = true
+                    task.spawn(function()
+                        while obj.Parent ~= nil and F.ControlPointESP do
+                            local hrp = getHRP()
+                            if hrp then
+                                local dist = math.floor((hrp.Position - anchor.Position).Magnitude)
+                                tl.Text = "<b>CONTROL POINT</b>\n<font size=\"10\">"..dist.." studs</font>"
+                            end
+                            task.wait(0.3)
+                        end
+                        pcall(function() bg:Destroy() end)
+                    end)
+                end
+
+                task.spawn(function()
+                    while obj.Parent ~= nil and F.ControlPointESP do task.wait(0.8) end
+                    pcall(function()
+                        local e = obj:FindFirstChild("CPESP"); if e then e:Destroy() end
+                        local b = obj:FindFirstChild("CPBILL"); if b then b:Destroy() end
+                    end)
+                end)
+            end
+        end
+    end
+end)
+
+-- ================================================================
+--  ESP RUNTIME
 -- ================================================================
 task.spawn(function()
     while task.wait(0.5) do
-        local count = entityCount
-        ivEntC.Text = tostring(count)
+        ivEntC.Text = tostring(entityCount)
 
         for model, data in pairs(entityCache) do
-            -- refresh pp reference if it disappeared (e.g. model rebuilt)
             if not data.pp or not data.pp.Parent then
                 data.pp = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
             end
             local pp = data.pp
             if not pp then continue end
 
-            -- Entity ESP billboard (add if missing and flag on)
             if F.EntityESP and not model:FindFirstChild("UnitTag") then
                 local bg=Instance.new("BillboardGui",model)
                 bg.Name="UnitTag"; bg.AlwaysOnTop=true
@@ -1013,7 +1500,6 @@ task.spawn(function()
                 tl.Font=Enum.Font.GothamBold; tl.TextSize=11
                 tl.TextStrokeTransparency=0.14; tl.RichText=true
                 task.spawn(function()
-                    -- throttled at 0.3s — was 0.15s, halves coroutine load
                     while model.Parent~=nil and F.EntityESP do
                         local hrp=getHRP()
                         if hrp then
@@ -1026,7 +1512,6 @@ task.spawn(function()
                 end)
             end
 
-            -- Chams (add if missing and flag on)
             if F.EntityChams and not model:FindFirstChild("ChamsHL") then
                 local h=Instance.new("Highlight",model)
                 h.Name="ChamsHL"; h.FillColor=Color3.fromRGB(88,0,208)
@@ -1042,8 +1527,6 @@ end)
 
 -- ================================================================
 --  IMAGE-ENTITY ALERT SCANNER
---  Iterates entityCache only — small table, no workspace scan.
---  Runs every 0.6s (was 0.4s scanning all of workspace).
 -- ================================================================
 task.spawn(function()
     while task.wait(0.6) do
@@ -1052,9 +1535,7 @@ task.spawn(function()
         end
         local hrp=getHRP(); if not hrp then continue end
         local selfPos=hrp.Position
-
-        local nearestDist=math.huge
-        local nearestEntry=nil
+        local nearestDist=math.huge; local nearestEntry=nil
 
         for model, data in pairs(entityCache) do
             local entry=matchImageEntity(model.Name)
@@ -1068,7 +1549,7 @@ task.spawn(function()
                         if now-(imageEntityAlerted[entry.pattern] or 0)>8 then
                             imageEntityAlerted[entry.pattern]=now
                             showAlert(entry.label, dist, entry.color)
-                            notify("⚠ "..entry.label.." — "..math.floor(dist).." studs", entry.color)
+                            notify("⚠ "..entry.label.."  "..math.floor(dist).." studs", entry.color)
                         end
                     end
                 end
@@ -1140,7 +1621,7 @@ task.spawn(function()
 end)
 
 -- ================================================================
---  SCRAP ESP  — iterates scrapCache (event-built, no GetDescendants)
+--  SCRAP ESP
 -- ================================================================
 task.spawn(function()
     while task.wait(1.2) do
@@ -1160,7 +1641,7 @@ task.spawn(function()
 end)
 
 -- ================================================================
---  CORPSE ESP  — iterates corpseCache
+--  CORPSE ESP
 -- ================================================================
 task.spawn(function()
     while task.wait(1.2) do
@@ -1214,6 +1695,7 @@ LP.CharacterAdded:Connect(function(char)
     local h=char:FindFirstChildOfClass("Humanoid")
     if h then h.WalkSpeed=F.OrigSpeed*F.SpeedMult end
     applyCharAttr(char)
+    if pfActive then stopPathfinding("respawned") end
 end)
 
 -- ================================================================
@@ -1231,6 +1713,7 @@ task.spawn(function()
         ivHP.Text=hp.." / "..maxHP
         if F.AutoSafe and not F.SafeCooldown and hp>0 and hp<=F.SafeHP then
             F.SafeCooldown=true
+            if pfActive then stopPathfinding("auto-safe") end
             local ok,msg=doSafeTeleport()
             notify(ok and "Auto safe spawn triggered" or "Safe spawn failed: "..msg, ok and W.success or W.danger)
             task.delay(5,function() F.SafeCooldown=false end)
@@ -1282,5 +1765,5 @@ Tog.MouseButton1Click:Connect(function() Main.Visible=not Main.Visible end)
 --  STARTUP
 -- ================================================================
 task.delay(0.5,function()
-    notify("Unit Hub v5.4 loaded  ·  "..LP.Name..(isOwner() and "  👑" or ""))
+    notify("Unit Hub v5.6 loaded  ·  "..LP.Name..(isOwner() and "  👑" or ""))
 end)
