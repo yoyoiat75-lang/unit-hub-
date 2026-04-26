@@ -1,9 +1,3 @@
--- ╔══════════════════════════════════════════════════════════════════════╗
--- ║         UNIT HUB  v5.6  —  Windows 11 Theme                        ║
--- ║  Tabs: ESP · WORLD · PLAYER · UTILS · LOG                          ║
--- ╚══════════════════════════════════════════════════════════════════════╝
-
--- ── SERVICES ──────────────────────────────────────────────────────────
 local TS   = game:GetService("TweenService")
 local RS   = game:GetService("RunService")
 local PLR  = game:GetService("Players")
@@ -12,23 +6,29 @@ local PFS  = game:GetService("PathfindingService")
 local LP   = PLR.LocalPlayer
 local RS_S = game:GetService("ReplicatedStorage")
 
--- ── CLEANUP ───────────────────────────────────────────────────────────
 pcall(function()
     for _, v in ipairs(game:GetService("CoreGui"):GetChildren()) do
         if v.Name:match("^UnitHub") then v:Destroy() end
     end
 end)
 
--- ================================================================
---  CONSTANTS
--- ================================================================
-local VERSION    = "5.6"
+local VERSION    = "5.7"
 local OWNER_NAME = "powenp99087"
 local function isOwner() return LP.Name == OWNER_NAME end
 
--- ================================================================
---  IMAGE ENTITIES  (Alex + Angry Munci only)
--- ================================================================
+local VP          = workspace.CurrentCamera.ViewportSize
+-- FIX: More reliable mobile detection — TouchEnabled alone is enough.
+-- Many phones still report KeyboardEnabled = true when a BT keyboard or
+-- on-screen keyboard is available, so the old `and not UIS.KeyboardEnabled`
+-- check caused mobile mode to silently disable itself.
+local IS_MOBILE   = UIS.TouchEnabled
+local SCALE       = 1
+if VP.X < 600 or IS_MOBILE then
+    SCALE = math.clamp(VP.X / 520, 0.62, 0.92)
+end
+local function sp(n) return math.floor(n * SCALE) end
+local HIT_H = IS_MOBILE and 44 or 0
+
 local IMAGE_ENTITIES = {
     { pattern = "alex",       label = "ALEX",        color = Color3.fromRGB(220, 48,  48) },
     { pattern = "angrymunci", label = "ANGRY MUNCI", color = Color3.fromRGB(255, 118,   0) },
@@ -45,9 +45,6 @@ local function matchImageEntity(name)
     end
 end
 
--- ================================================================
---  WIN11 PALETTE
--- ================================================================
 local W = {
     bg         = Color3.fromRGB(18, 18, 26),
     surface    = Color3.fromRGB(28, 28, 38),
@@ -69,33 +66,30 @@ local W = {
     teal       = Color3.fromRGB(0,   188, 188),
 }
 
--- ================================================================
---  FLAGS
--- ================================================================
 local F = {
-    EntityESP       = false,
-    EntityChams     = false,
-    PlayerESP       = false,
-    ScrapESP        = false,
-    CorpseESP       = false,
-    ControlPointESP = false,
-    FullBright      = false,
-    NoFog           = false,
-    Noclip          = false,
-    AutoSafe        = false,
-    AntiAFK         = false,
-    ImageAlert      = true,
-    PathfindScrap   = false,
-    SpeedMult       = 1,
-    SafeHP          = 30,
-    SafeCooldown    = false,
-    OrigSpeed       = 16,
-    SprintDuration  = 15,
+    EntityESP         = false,
+    EntityChams       = false,
+    PlayerESP         = false,
+    ScrapESP          = false,
+    CorpseESP         = false,
+    ControlPointESP   = false,
+    FullBright        = false,
+    NoFog             = false,
+    Noclip            = false,
+    AutoSafe          = false,
+    AntiAFK           = false,
+    ImageAlert        = true,
+    PathfindScrap     = false,
+    SpeedMult         = 1,
+    SafeHP            = 30,
+    SafeCooldown      = false,
+    OrigSpeed         = 16,
+    SprintDuration    = 15,
+    EntityPingSounds  = false,
+    RadarEnabled      = false,
+    PingRange         = 40,
 }
 
--- ================================================================
---  HUB TAGGING
--- ================================================================
 pcall(function()
     for _, v in ipairs(RS_S:GetChildren()) do
         if v.Name:match("^UH_v[456]_user_") then v:Destroy() end
@@ -113,9 +107,6 @@ LP.AncestryChanged:Connect(function()
     pcall(function() local t=RS_S:FindFirstChild("UH_v5_user_"..LP.UserId); if t then t:Destroy() end end)
 end)
 
--- ================================================================
---  UTILITY
--- ================================================================
 local function tw(obj, t, props)
     TS:Create(obj, TweenInfo.new(t, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
@@ -164,9 +155,6 @@ local function applySpeed()
     local h=getHum(); if h then h.WalkSpeed=F.OrigSpeed*F.SpeedMult end
 end
 
--- ================================================================
---  ENTITY CACHE  ← event-driven
--- ================================================================
 local entityCache  = {}
 local entityCount  = 0
 
@@ -201,18 +189,13 @@ if not entitiesFolder then
     end)
 end
 
--- ================================================================
---  SCRAP / CORPSE CACHES
--- ================================================================
 local scrapCache   = {}
 local corpseCache  = {}
 
 local function hookFolder(folder, cache)
     if not folder then return end
     local function add(d)
-        if (d:IsA("Model") or d:IsA("BasePart")) and not cache[d] then
-            cache[d] = true
-        end
+        if (d:IsA("Model") or d:IsA("BasePart")) and not cache[d] then cache[d] = true end
     end
     local function rem(d) cache[d] = nil end
     for _,d in ipairs(folder:GetDescendants()) do add(d) end
@@ -244,112 +227,335 @@ workspace.ChildAdded:Connect(function(c)
     end
 end)
 
--- ================================================================
---  CONTROL POINT CACHE  ← event-driven, watches Round folder
--- ================================================================
-local cpCache    = {}
-local cpCount    = 0
-local cpDetected = false
+local cpCache       = {}
+local cpCount       = 0
+local cpDetected    = false
 local cpESPToggleFn = nil
 
 local function cpAdd(d)
     if not (d:IsA("BasePart") or d:IsA("Model")) then return end
     if d.Name ~= "ControlPoint" then return end
     if cpCache[d] then return end
-    cpCache[d] = true
-    cpCount += 1
+    cpCache[d] = true; cpCount += 1
     if not cpDetected then
         cpDetected = true
-        if cpESPToggleFn then
-            cpESPToggleFn(true)
-            F.ControlPointESP = true
-        end
+        if cpESPToggleFn then cpESPToggleFn(true); F.ControlPointESP = true end
     end
 end
 
 local function cpRemove(d)
-    if cpCache[d] then
-        cpCache[d] = nil
-        cpCount = math.max(0, cpCount - 1)
-    end
+    if cpCache[d] then cpCache[d] = nil; cpCount = math.max(0, cpCount-1) end
 end
 
-local function hookRoundFolder(roundFolder)
-    if not roundFolder then return end
-    for _, d in ipairs(roundFolder:GetDescendants()) do cpAdd(d) end
-    roundFolder.DescendantAdded:Connect(cpAdd)
-    roundFolder.DescendantRemoving:Connect(cpRemove)
+local function hookRoundFolder(rf)
+    if not rf then return end
+    for _, d in ipairs(rf:GetDescendants()) do cpAdd(d) end
+    rf.DescendantAdded:Connect(cpAdd)
+    rf.DescendantRemoving:Connect(cpRemove)
 end
 
 local function tryHookRound()
-    local mf = workspace:FindFirstChild("MapFolder")
-    if not mf then return end
+    local mf = workspace:FindFirstChild("MapFolder"); if not mf then return end
     local rnd = mf:FindFirstChild("Round")
-    if rnd then
-        hookRoundFolder(rnd)
-    else
-        mf.ChildAdded:Connect(function(c)
-            if c.Name == "Round" then hookRoundFolder(c) end
-        end)
-    end
+    if rnd then hookRoundFolder(rnd)
+    else mf.ChildAdded:Connect(function(c) if c.Name=="Round" then hookRoundFolder(c) end end) end
 end
 
 tryHookRound()
 workspace.ChildAdded:Connect(function(c)
-    if c.Name == "MapFolder" then
-        task.wait(0.5)
-        tryHookRound()
-    end
+    if c.Name=="MapFolder" then task.wait(0.5); tryHookRound() end
 end)
 
--- ================================================================
---  PATHFINDING SCRAP SYSTEM
--- ================================================================
-local pfActive     = false
-local pfThread     = nil
-local SPRINT_SPEED = 28
-local NORMAL_SPEED = 16
+local pingSoundId   = "rbxassetid://9119713951"
+local pingSoundInst = nil
+local pingCooldowns = {}
 
-local function getNearestScrap()
+local function ensurePingSound()
     local hrp = getHRP(); if not hrp then return nil end
-    local debrisMap = workspace:FindFirstChild("Debris")
-        and workspace.Debris:FindFirstChild("Map")
-    if not debrisMap then return nil end
-    local scrapFolder = debrisMap:FindFirstChild("Scrap")
-    if not scrapFolder then return nil end
+    if pingSoundInst and pingSoundInst.Parent then return pingSoundInst end
+    local s = Instance.new("Sound", hrp)
+    s.Name        = "UH_PingSound"
+    s.SoundId     = pingSoundId
+    s.Volume      = 0.55
+    s.RollOffMaxDistance = 0
+    s.RespectFilteringEnabled = false
+    pingSoundInst = s
+    return s
+end
 
-    local nearest, nearestDist = nil, math.huge
-    for _, obj in ipairs(scrapFolder:GetDescendants()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") then
-            local pos
-            if obj:IsA("BasePart") then
-                pos = obj.Position
-            elseif obj:IsA("Model") and obj.PrimaryPart then
-                pos = obj.PrimaryPart.Position
-            end
-            if pos then
-                local d = (hrp.Position - pos).Magnitude
-                if d < nearestDist then nearestDist = d; nearest = obj end
+LP.CharacterAdded:Connect(function()
+    pingSoundInst = nil
+    task.wait(0.8)
+    if F.EntityPingSounds then ensurePingSound() end
+end)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if not F.EntityPingSounds then continue end
+        local hrp = getHRP(); if not hrp then continue end
+        local selfPos = hrp.Position
+        local snd = ensurePingSound(); if not snd then continue end
+
+        for model, data in pairs(entityCache) do
+            local pp = data.pp; if not pp then continue end
+            local dist = (selfPos - pp.Position).Magnitude
+            if dist <= F.PingRange then
+                local key = tostring(model)
+                local now = tick()
+                if now - (pingCooldowns[key] or 0) >= 8 then
+                    pingCooldowns[key] = now
+                    local pitchMult = 1 + math.clamp((F.PingRange - dist) / F.PingRange, 0, 1) * 0.6
+                    snd.PlaybackSpeed = pitchMult
+                    snd:Play()
+                end
             end
         end
     end
-    return nearest, nearestDist
+end)
+
+local pfActive   = false
+local pfThread   = nil
+
+local WALK_SPEED     = 16
+local SPRINT_SPEED   = 22
+local FLEE_SPEED     = 26
+
+local STAMINA_MAX      = 12
+local STAMINA_DRAIN    = 1.0
+local STAMINA_REGEN    = 1.0
+local STAMINA_REGEN_FAST = 2.0
+local stamina          = STAMINA_MAX
+local lastStaminaTick  = tick()
+
+local function updateStamina(isSprinting, entityFar)
+    local now  = tick()
+    local dt   = now - lastStaminaTick
+    lastStaminaTick = now
+    if isSprinting then
+        stamina = math.max(0, stamina - STAMINA_DRAIN * dt)
+    else
+        local rate = entityFar and STAMINA_REGEN_FAST or STAMINA_REGEN
+        stamina = math.min(STAMINA_MAX, stamina + rate * dt)
+    end
+    return stamina
 end
 
-local ENTITY_AVOID_RADIUS = 20
-local function isTooCloseToEntity(pos)
-    for model, data in pairs(entityCache) do
-        if data.pp then
-            if (pos - data.pp.Position).Magnitude < ENTITY_AVOID_RADIUS then
-                return true
-            end
+local FLEE_TRIGGER     = 22
+local SPRINT_TRIGGER   = 45
+local PATH_BLOCK       = 14
+local ENTITY_SEE_RANGE = 180
+local COMBAT_FLEE_TIME = 5.0
+local FLEE_DIST        = 55
+
+local JUMP_HEIGHT_MIN  = 1.8
+local STUCK_TIME       = 0.75
+local STUCK_DIST       = 1.2
+
+local STATE_SCRAP   = "SCRAP"
+local STATE_COMBAT  = "COMBAT"
+local STATE_FLEE    = "FLEE"
+local pfState       = STATE_SCRAP
+
+local visitedScraps = {}
+local lastHP        = math.huge
+
+local ivPFStatus
+local ivPFSprint
+
+local function nearestEntity(fromPos)
+    local bestPos, bestDist = nil, math.huge
+    for _, data in pairs(entityCache) do
+        if data.pp and data.pp.Parent then
+            local d = (fromPos - data.pp.Position).Magnitude
+            if d < bestDist then bestDist = d; bestPos = data.pp.Position end
+        end
+    end
+    return bestPos, bestDist
+end
+
+local function entityNear(pos, radius)
+    for _, data in pairs(entityCache) do
+        if data.pp and data.pp.Parent then
+            if (pos - data.pp.Position).Magnitude < radius then return true end
         end
     end
     return false
 end
 
-local ivPFStatus
-local ivPFSprint
+local PF_AGENT_PARAMS = {
+    AgentHeight  = 5,
+    AgentRadius  = 2,
+    AgentCanJump = true,
+    Costs        = { InteriorInvWall = 1000 },
+}
+
+local function findBestScrap(fromPos, avoidEntityRadius)
+    local best, bestDist, bestPos = nil, math.huge, nil
+    for obj in pairs(scrapCache) do
+        if visitedScraps[obj] then continue end
+        if not obj.Parent then continue end
+        local pos
+        if obj:IsA("BasePart") then
+            pos = obj.Position
+        elseif obj:IsA("Model") and obj.PrimaryPart then
+            pos = obj.PrimaryPart.Position
+        end
+        if not pos then continue end
+        if avoidEntityRadius and entityNear(pos, avoidEntityRadius) then continue end
+        local d = (fromPos - pos).Magnitude
+        if d < bestDist then bestDist = d; best = obj; bestPos = pos end
+    end
+    if best then return { obj = best, pos = bestPos, dist = bestDist } end
+    return nil
+end
+
+local function getNearestSafeSpawn(fromPos)
+    local parts = getSpawnParts()
+    if #parts == 0 then return nil end
+    local best, bestDist = nil, math.huge
+    for _, sp in ipairs(parts) do
+        local d = (fromPos - sp.Position).Magnitude
+        if d < bestDist and not entityNear(sp.Position, 30) then
+            bestDist = d; best = sp
+        end
+    end
+    if not best then
+        for _, sp in ipairs(parts) do
+            local d = (fromPos - sp.Position).Magnitude
+            if d < bestDist then bestDist = d; best = sp end
+        end
+    end
+    return best, bestDist
+end
+
+local function computePath(from, to)
+    local path = PFS:CreatePath(PF_AGENT_PARAMS)
+    local ok   = pcall(function() path:ComputeAsync(from, to) end)
+    if not ok or path.Status == Enum.PathStatus.NoPath then return nil end
+    local wps = path:GetWaypoints()
+    return (#wps > 0) and wps or nil
+end
+
+local function walkToWaypoint(hum, wp)
+    local hrp = getHRP()
+    if not hrp then return false end
+
+    local heightDiff = wp.Position.Y - hrp.Position.Y
+    if heightDiff > JUMP_HEIGHT_MIN or wp.Action == Enum.PathWaypointAction.Jump then
+        hum.Jump = true
+        task.wait(0.12)
+    end
+
+    hum:MoveTo(wp.Position)
+
+    local lastPos    = hrp.Position
+    local lastMoveAt = tick()
+    local arrived    = false
+    local conn = hum.MoveToFinished:Connect(function(r) arrived = r end)
+
+    local t0 = tick()
+    repeat
+        task.wait(0.07)
+        hrp = getHRP()
+        if not hrp then conn:Disconnect(); return false end
+
+        if (hrp.Position - wp.Position).Magnitude < 2.2 then
+            arrived = true; break
+        end
+
+        local moved = (hrp.Position - lastPos).Magnitude
+        if moved > STUCK_DIST then
+            lastPos = hrp.Position; lastMoveAt = tick()
+        elseif tick() - lastMoveAt > STUCK_TIME then
+            hum.Jump   = true
+            lastMoveAt = tick()
+            lastPos    = hrp.Position
+        end
+
+        if not pfActive or not F.PathfindScrap then
+            conn:Disconnect(); return false
+        end
+    until arrived or (tick() - t0 > 5)
+
+    conn:Disconnect()
+    return arrived
+end
+
+local function rawFlee(hum, duration, speed)
+    hum.WalkSpeed = speed or FLEE_SPEED
+    local t0 = tick()
+    while tick() - t0 < duration do
+        local hrp = getHRP()
+        if not hrp or not hum then break end
+
+        local tx, tz, n = 0, 0, 0
+        for _, data in pairs(entityCache) do
+            if data.pp and data.pp.Parent then
+                local d = (hrp.Position - data.pp.Position).Magnitude
+                if d < FLEE_TRIGGER * 4 then
+                    tx += data.pp.Position.X
+                    tz += data.pp.Position.Z
+                    n  += 1
+                end
+            end
+        end
+
+        if n == 0 then break end
+
+        local threat = Vector3.new(tx/n, hrp.Position.Y, tz/n)
+        local away   = hrp.Position - threat
+        away = Vector3.new(away.X, 0, away.Z)
+        if away.Magnitude < 0.5 then
+            away = Vector3.new(math.random()-0.5, 0, math.random()-0.5)
+        end
+        hum:MoveTo(hrp.Position + away.Unit * FLEE_DIST)
+        task.wait(0.28)
+    end
+    local hrp = getHRP()
+    if hrp and hum then hum:MoveTo(hrp.Position) end
+end
+
+local function smartFlee(hum, reason)
+    if ivPFStatus then ivPFStatus.Text = "⚠ " .. (reason or "FLEE") .. " — heading to spawn" end
+    if ivPFSprint  then ivPFSprint.Text = "COMBAT" end
+
+    hum.WalkSpeed = FLEE_SPEED
+    stamina = math.max(0, stamina)
+
+    local hrp = getHRP()
+    if not hrp then return end
+
+    local spawn, _ = getNearestSafeSpawn(hrp.Position)
+    if not spawn then
+        rawFlee(hum, COMBAT_FLEE_TIME, FLEE_SPEED)
+        return
+    end
+
+    local waypoints = computePath(hrp.Position, spawn.Position + Vector3.new(0, 3, 0))
+    if not waypoints then
+        if ivPFStatus then ivPFStatus.Text = "⚠ No path to spawn — raw flee" end
+        rawFlee(hum, COMBAT_FLEE_TIME, FLEE_SPEED)
+        return
+    end
+
+    local deadline = tick() + COMBAT_FLEE_TIME + 4
+    for _, wp in ipairs(waypoints) do
+        if tick() > deadline then break end
+        if not pfActive or not F.PathfindScrap then break end
+
+        hrp = getHRP(); hum = getHum()
+        if not hrp or not hum then break end
+
+        local _, eDist = nearestEntity(hrp.Position)
+        hum.WalkSpeed = eDist < SPRINT_TRIGGER and FLEE_SPEED or SPRINT_SPEED
+
+        walkToWaypoint(hum, wp)
+    end
+
+    if ivPFStatus then ivPFStatus.Text = "reached safety — resuming" end
+    if ivPFSprint  then ivPFSprint.Text = "—" end
+    task.wait(0.8)
+end
 
 local function stopPathfinding(reason)
     pfActive = false
@@ -357,77 +563,79 @@ local function stopPathfinding(reason)
     local hum = getHum()
     if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
     if ivPFStatus then ivPFStatus.Text = reason or "idle" end
-    if ivPFSprint then ivPFSprint.Text = "—" end
+    if ivPFSprint  then ivPFSprint.Text = "—" end
 end
 
 local function runPathfindingLoop()
-    pfActive = true
-    local hum = getHum()
-    local hrp = getHRP()
-    if not hum or not hrp then stopPathfinding("no char"); return end
+    pfActive      = true
+    visitedScraps = {}
+    pfState       = STATE_SCRAP
+    lastStaminaTick = tick()
+
+    local hum0 = getHum()
+    lastHP = hum0 and math.floor(hum0.Health) or math.huge
 
     while F.PathfindScrap and pfActive do
-        hrp = getHRP(); hum = getHum()
-        if not hrp or not hum then stopPathfinding("no char"); break end
+        local hrp = getHRP()
+        local hum = getHum()
+        if not hrp or not hum then stopPathfinding("no char"); return end
 
-        if isTooCloseToEntity(hrp.Position) then
-            if ivPFStatus then ivPFStatus.Text = "⚠ Entity near — waiting" end
-            if ivPFSprint then ivPFSprint.Text = "—" end
-            task.wait(1)
+        local selfPos = hrp.Position
+        local _, eDist = nearestEntity(selfPos)
+
+        local curHP = math.floor(hum.Health)
+        if curHP < lastHP and curHP > 0 then
+            pfState = STATE_COMBAT
+            stamina = math.min(stamina + 3, STAMINA_MAX)
+        end
+        lastHP = curHP
+
+        if pfState == STATE_COMBAT then
+            if ivPFStatus then ivPFStatus.Text = "⚠ TAKING DAMAGE — fleeing!" end
+            smartFlee(hum, "DAMAGE TAKEN")
+            pfState = STATE_SCRAP
+            lastHP  = math.floor((getHum() or {Health=math.huge}).Health)
             continue
         end
 
-        local target, dist = getNearestScrap()
+        if eDist < FLEE_TRIGGER then
+            pfState = STATE_FLEE
+            if ivPFStatus then ivPFStatus.Text = "⚠ Entity "..math.floor(eDist).." st — FLEE" end
+            smartFlee(hum, "ENTITY "..math.floor(eDist).." st")
+            pfState = STATE_SCRAP
+            continue
+        end
+
+        pfState = STATE_SCRAP
+
+        local target = findBestScrap(selfPos, PATH_BLOCK)
+        if not target then
+            visitedScraps = {}
+            target = findBestScrap(selfPos, nil)
+        end
         if not target then
             if ivPFStatus then ivPFStatus.Text = "no scrap found" end
-            if ivPFSprint then ivPFSprint.Text = "—" end
-            task.wait(2)
-            continue
+            if ivPFSprint  then ivPFSprint.Text = "—" end
+            task.wait(2); continue
         end
 
-        local targetPos
-        if target:IsA("BasePart") then
-            targetPos = target.Position
-        elseif target:IsA("Model") and target.PrimaryPart then
-            targetPos = target.PrimaryPart.Position
-        else
-            task.wait(0.5); continue
-        end
+        visitedScraps[target.obj] = true
+        if ivPFStatus then ivPFStatus.Text = "→ scrap  "..math.floor(target.dist).." st" end
 
-        if isTooCloseToEntity(targetPos) then
-            if ivPFStatus then ivPFStatus.Text = "⚠ Entity on path — skipping" end
-            task.wait(1.5)
-            continue
-        end
-
-        local agentParams = { AgentHeight = 5, AgentRadius = 2, AgentCanJump = true }
-        local path = PFS:CreatePath(agentParams)
-        local ok = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
-
-        if not ok or path.Status == Enum.PathStatus.NoPath then
+        local waypoints = computePath(selfPos, target.pos)
+        if not waypoints then
             if ivPFStatus then ivPFStatus.Text = "no path — skipping" end
-            task.wait(1)
-            continue
+            task.wait(0.8); continue
         end
 
-        local waypoints = path:GetWaypoints()
-        if #waypoints == 0 then task.wait(0.5); continue end
+        local aborted     = false
+        local cdownActive = true
 
-        hum.WalkSpeed = SPRINT_SPEED
-        local sprintStart = tick()
-        local sprintMax   = F.SprintDuration
-
-        if ivPFStatus then ivPFStatus.Text = "→ scrap  "..math.floor(dist).." st" end
-
-        local countdownActive = true
         task.spawn(function()
-            while countdownActive and pfActive and F.PathfindScrap do
-                local elapsed = tick() - sprintStart
-                local remaining = math.max(0, sprintMax - elapsed)
+            while cdownActive and pfActive and F.PathfindScrap do
+                local st = math.floor(stamina * 10) / 10
                 if ivPFSprint then
-                    ivPFSprint.Text = remaining > 0
-                        and "sprint  "..string.format("%.1f", remaining).."s"
-                        or  "walking"
+                    ivPFSprint.Text = "stamina  "..string.format("%.1f", st).."s"
                 end
                 task.wait(0.1)
             end
@@ -435,53 +643,88 @@ local function runPathfindingLoop()
         end)
 
         for _, wp in ipairs(waypoints) do
-            if not F.PathfindScrap or not pfActive then break end
+            if not F.PathfindScrap or not pfActive then aborted = true; break end
+
             hrp = getHRP(); hum = getHum()
-            if not hrp or not hum then break end
+            if not hrp or not hum then aborted = true; break end
 
-            if isTooCloseToEntity(hrp.Position) then
+            local midHP = math.floor(hum.Health)
+            if midHP < lastHP and midHP > 0 then
+                lastHP  = midHP
+                pfState = STATE_COMBAT
+                stamina = math.min(stamina + 3, STAMINA_MAX)
                 hum:MoveTo(hrp.Position)
-                if ivPFStatus then ivPFStatus.Text = "⚠ Entity mid-path — abort" end
-                task.wait(2)
-                break
+                cdownActive = false
+                smartFlee(hum, "DAMAGE MID-PATH")
+                pfState = STATE_SCRAP
+                lastHP  = math.floor((getHum() or {Health=math.huge}).Health)
+                aborted = true; break
+            end
+            lastHP = midHP
+
+            local _, midEDist = nearestEntity(hrp.Position)
+            if midEDist < FLEE_TRIGGER then
+                hum:MoveTo(hrp.Position)
+                cdownActive = false
+                smartFlee(hum, "ENTITY MID-PATH")
+                aborted = true; break
             end
 
-            if tick() - sprintStart >= sprintMax then
-                hum.WalkSpeed = F.OrigSpeed * F.SpeedMult
+            if entityNear(wp.Position, PATH_BLOCK) then
+                if ivPFStatus then ivPFStatus.Text = "entity on waypoint — skip" end
+                continue
             end
 
-            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
-            hum:MoveTo(wp.Position)
-            local moved = hum.MoveToFinished:Wait()
-            if not moved then break end
+            local isSprinting = false
+            if midEDist < SPRINT_TRIGGER and stamina > 0 then
+                isSprinting   = true
+                hum.WalkSpeed = SPRINT_SPEED
+            else
+                isSprinting   = false
+                hum.WalkSpeed = WALK_SPEED
+            end
+
+            local entityFar = midEDist > SPRINT_TRIGGER * 2
+            updateStamina(isSprinting, entityFar)
+
+            walkToWaypoint(hum, wp)
         end
 
-        countdownActive = false
+        cdownActive = false
+        hum = getHum()
         if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
-        task.wait(0.3)
+
+        if not aborted then task.wait(0.25) end
     end
 
     stopPathfinding("stopped")
 end
 
--- ================================================================
---  SCREEN GUI
--- ================================================================
 local SG = Instance.new("ScreenGui")
 SG.Name="UnitHubV5"; SG.Parent=game:GetService("CoreGui")
 SG.ResetOnSpawn=false; SG.IgnoreGuiInset=true; SG.DisplayOrder=999
 
--- ================================================================
---  MAIN FRAME  500 × 580
--- ================================================================
+local FRAME_W = sp(500)
+local FRAME_H = sp(580)
+
 local Main = Instance.new("Frame",SG)
-Main.Name="Main"; Main.Size=UDim2.new(0,500,0,580)
-Main.Position=UDim2.new(0.5,-250,0.5,-290)
+Main.Name="Main"
+Main.Size     = UDim2.new(0, FRAME_W, 0, FRAME_H)
+Main.Position = UDim2.new(0.5, -FRAME_W/2, 0.5, -FRAME_H/2)
 Main.BackgroundColor3=W.bg; Main.BorderSizePixel=0
 Main.Active=true; Main.Draggable=true; Main.ClipsDescendants=true
 Instance.new("UICorner",Main).CornerRadius=UDim.new(0,12)
 local MainStroke=Instance.new("UIStroke",Main)
 MainStroke.Color=Color3.fromRGB(52,52,72); MainStroke.Thickness=1
+
+local function clampMainPosition()
+    local vp = workspace.CurrentCamera.ViewportSize
+    local ax  = Main.AbsolutePosition
+    local newX = math.clamp(ax.X, 0, math.max(0, vp.X - FRAME_W))
+    local newY = math.clamp(ax.Y, 0, math.max(0, vp.Y - FRAME_H))
+    Main.Position = UDim2.new(0, newX, 0, newY)
+end
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(clampMainPosition)
 
 local Mica=Instance.new("Frame",Main)
 Mica.Size=UDim2.new(1,0,0.36,0); Mica.BackgroundColor3=Color3.fromRGB(28,22,52)
@@ -489,8 +732,7 @@ Mica.BackgroundTransparency=0.82; Mica.BorderSizePixel=0; Mica.ZIndex=0
 Instance.new("UICorner",Mica).CornerRadius=UDim.new(0,12)
 
 local TopBar=Instance.new("Frame",Main)
-TopBar.Size=UDim2.new(1,0,0,3); TopBar.BorderSizePixel=0
-TopBar.BackgroundColor3=W.accent
+TopBar.Size=UDim2.new(1,0,0,3); TopBar.BorderSizePixel=0; TopBar.BackgroundColor3=W.accent
 local TG=Instance.new("UIGradient",TopBar)
 TG.Color=ColorSequence.new{
     ColorSequenceKeypoint.new(0,    Color3.fromRGB(0,   88, 255)),
@@ -499,21 +741,18 @@ TG.Color=ColorSequence.new{
     ColorSequenceKeypoint.new(0.85, Color3.fromRGB(140, 18, 196)),
     ColorSequenceKeypoint.new(1,    Color3.fromRGB(0,   88, 255)),
 }
-task.spawn(function()
-    local r=0; while true do r=(r+0.22)%360; TG.Rotation=r; task.wait(0.04) end
-end)
+task.spawn(function() local r=0; while true do r=(r+0.22)%360; TG.Rotation=r; task.wait(0.04) end end)
 
--- ── TITLE BAR ────────────────────────────────────────────────
 local TitleBar=Instance.new("Frame",Main)
-TitleBar.Size=UDim2.new(1,0,0,48); TitleBar.Position=UDim2.new(0,0,0,3)
+TitleBar.Size=UDim2.new(1,0,0,sp(48)); TitleBar.Position=UDim2.new(0,0,0,3)
 TitleBar.BackgroundColor3=Color3.fromRGB(20,18,32); TitleBar.BorderSizePixel=0; TitleBar.ZIndex=2
-local TBC=Instance.new("UICorner",TitleBar); TBC.CornerRadius=UDim.new(0,12)
+Instance.new("UICorner",TitleBar).CornerRadius=UDim.new(0,12)
 local TBMask=Instance.new("Frame",TitleBar)
 TBMask.Size=UDim2.new(1,0,0,12); TBMask.Position=UDim2.new(0,0,1,-12)
 TBMask.BackgroundColor3=Color3.fromRGB(20,18,32); TBMask.BorderSizePixel=0
 
 local AppIcon=Instance.new("Frame",TitleBar)
-AppIcon.Size=UDim2.new(0,26,0,26); AppIcon.Position=UDim2.new(0,14,0.5,-13)
+AppIcon.Size=UDim2.new(0,sp(26),0,sp(26)); AppIcon.Position=UDim2.new(0,sp(14),0.5,-sp(13))
 AppIcon.BackgroundColor3=W.accent; AppIcon.BorderSizePixel=0; AppIcon.ZIndex=3
 Instance.new("UICorner",AppIcon).CornerRadius=UDim.new(0,6)
 local AIGrad=Instance.new("UIGradient",AppIcon)
@@ -521,7 +760,8 @@ AIGrad.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequen
 AIGrad.Rotation=135
 local AIL=Instance.new("TextLabel",AppIcon)
 AIL.Size=UDim2.new(1,0,1,0); AIL.BackgroundTransparency=1
-AIL.Text="UH"; AIL.TextColor3=Color3.new(1,1,1); AIL.Font=Enum.Font.GothamBlack; AIL.TextSize=10; AIL.ZIndex=4
+AIL.Text="UH"; AIL.TextColor3=Color3.new(1,1,1); AIL.Font=Enum.Font.GothamBlack
+AIL.TextSize=IS_MOBILE and 9 or 10; AIL.ZIndex=4
 
 if isOwner() then
     local cL=Instance.new("TextLabel",AppIcon)
@@ -530,13 +770,14 @@ if isOwner() then
 end
 
 local TitleL=Instance.new("TextLabel",TitleBar)
-TitleL.Size=UDim2.new(0,140,0,19); TitleL.Position=UDim2.new(0,47,0,7)
+TitleL.Size=UDim2.new(0,sp(140),0,sp(19)); TitleL.Position=UDim2.new(0,sp(47),0,sp(7))
 TitleL.BackgroundTransparency=1; TitleL.Text="Unit Hub"
 TitleL.TextColor3=W.txtPri; TitleL.Font=Enum.Font.GothamSemibold
-TitleL.TextSize=13; TitleL.TextXAlignment=Enum.TextXAlignment.Left; TitleL.ZIndex=3
+TitleL.TextSize=IS_MOBILE and 11 or 13
+TitleL.TextXAlignment=Enum.TextXAlignment.Left; TitleL.ZIndex=3
 
 local VerChip=Instance.new("Frame",TitleBar)
-VerChip.Size=UDim2.new(0,40,0,15); VerChip.Position=UDim2.new(0,112,0,8)
+VerChip.Size=UDim2.new(0,sp(40),0,sp(15)); VerChip.Position=UDim2.new(0,sp(112),0,sp(8))
 VerChip.BackgroundColor3=W.surfaceUp; VerChip.BorderSizePixel=0; VerChip.ZIndex=3
 Instance.new("UICorner",VerChip).CornerRadius=UDim.new(0,4)
 local VerChipStroke=Instance.new("UIStroke",VerChip)
@@ -560,7 +801,7 @@ VCL.TextColor3=W.txtSec; VCL.Font=Enum.Font.Gotham; VCL.TextSize=9; VCL.ZIndex=4
 
 if isOwner() then
     local oChip=Instance.new("Frame",TitleBar)
-    oChip.Size=UDim2.new(0,60,0,15); oChip.Position=UDim2.new(0,158,0,8)
+    oChip.Size=UDim2.new(0,sp(60),0,sp(15)); oChip.Position=UDim2.new(0,sp(158),0,sp(8))
     oChip.BackgroundColor3=Color3.fromRGB(72,50,0); oChip.BackgroundTransparency=0.48
     oChip.BorderSizePixel=0; oChip.ZIndex=3
     Instance.new("UICorner",oChip).CornerRadius=UDim.new(0,4)
@@ -570,7 +811,7 @@ if isOwner() then
 end
 
 local StatusChip=Instance.new("Frame",TitleBar)
-StatusChip.Size=UDim2.new(0,64,0,18); StatusChip.Position=UDim2.new(1,-164,0.5,-9)
+StatusChip.Size=UDim2.new(0,sp(64),0,sp(18)); StatusChip.Position=UDim2.new(1,-sp(164),0.5,-sp(9))
 StatusChip.BackgroundColor3=Color3.fromRGB(12,32,12); StatusChip.BorderSizePixel=0; StatusChip.ZIndex=3
 Instance.new("UICorner",StatusChip).CornerRadius=UDim.new(0,4)
 local SCD=Instance.new("Frame",StatusChip)
@@ -583,13 +824,13 @@ SCL.BackgroundTransparency=1; SCL.Text="Active"
 SCL.TextColor3=Color3.fromRGB(18,205,18); SCL.Font=Enum.Font.GothamSemibold; SCL.TextSize=9; SCL.ZIndex=4
 
 local HPLbl=Instance.new("TextLabel",TitleBar)
-HPLbl.Size=UDim2.new(0,90,0,12); HPLbl.Position=UDim2.new(1,-102,0,8)
+HPLbl.Size=UDim2.new(0,sp(90),0,sp(12)); HPLbl.Position=UDim2.new(1,-sp(102),0,sp(8))
 HPLbl.BackgroundTransparency=1; HPLbl.Text="HP  —"
 HPLbl.TextColor3=W.txtHint; HPLbl.Font=Enum.Font.Gotham; HPLbl.TextSize=9
 HPLbl.TextXAlignment=Enum.TextXAlignment.Left; HPLbl.ZIndex=3
 
 local HPTrack=Instance.new("Frame",TitleBar)
-HPTrack.Size=UDim2.new(0,90,0,3); HPTrack.Position=UDim2.new(1,-102,0,24)
+HPTrack.Size=UDim2.new(0,sp(90),0,3); HPTrack.Position=UDim2.new(1,-sp(102),0,sp(24))
 HPTrack.BackgroundColor3=W.sep; HPTrack.BorderSizePixel=0; HPTrack.ZIndex=3
 Instance.new("UICorner",HPTrack).CornerRadius=UDim.new(1,0)
 local HPFill=Instance.new("Frame",HPTrack)
@@ -597,99 +838,78 @@ HPFill.Size=UDim2.new(1,0,1,0); HPFill.BorderSizePixel=0; HPFill.BackgroundColor
 Instance.new("UICorner",HPFill).CornerRadius=UDim.new(1,0)
 
 local TBSep=Instance.new("Frame",Main)
-TBSep.Size=UDim2.new(1,0,0,1); TBSep.Position=UDim2.new(0,0,0,51)
+TBSep.Size=UDim2.new(1,0,0,1); TBSep.Position=UDim2.new(0,0,0,sp(48)+3)
 TBSep.BackgroundColor3=W.sep; TBSep.BorderSizePixel=0
 
--- ================================================================
---  ALERT BANNER
--- ================================================================
+local TITLE_BOTTOM = sp(48)+3+1
+
 local AlertBanner=Instance.new("Frame",SG)
-AlertBanner.Size=UDim2.new(0,320,0,52); AlertBanner.AnchorPoint=Vector2.new(0.5,0)
+AlertBanner.Size=UDim2.new(0,sp(320),0,sp(52)); AlertBanner.AnchorPoint=Vector2.new(0.5,0)
 AlertBanner.Position=UDim2.new(0.5,0,-0.18,0)
 AlertBanner.BackgroundColor3=Color3.fromRGB(92,10,10); AlertBanner.BorderSizePixel=0
-AlertBanner.ClipsDescendants=false; AlertBanner.ZIndex=200
-AlertBanner.Visible=false
+AlertBanner.ClipsDescendants=false; AlertBanner.ZIndex=200; AlertBanner.Visible=false
 Instance.new("UICorner",AlertBanner).CornerRadius=UDim.new(0,10)
 local AStroke=Instance.new("UIStroke",AlertBanner)
 AStroke.Color=Color3.fromRGB(210,28,28); AStroke.Thickness=1.5
-
 local ABGrad=Instance.new("UIGradient",AlertBanner)
 ABGrad.Color=ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(130, 14, 14)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB( 72,  6,  6)),
-}
-ABGrad.Rotation=90
-
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(130,14,14)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(72,6,6)),
+}; ABGrad.Rotation=90
 local AIcon=Instance.new("TextLabel",AlertBanner)
 AIcon.Size=UDim2.new(0,38,1,0); AIcon.BackgroundTransparency=1
 AIcon.Text="⚠"; AIcon.TextColor3=Color3.new(1,1,1)
 AIcon.Font=Enum.Font.GothamBlack; AIcon.TextSize=20; AIcon.ZIndex=201
-
 local ATitle=Instance.new("TextLabel",AlertBanner)
 ATitle.Size=UDim2.new(1,-44,0,20); ATitle.Position=UDim2.new(0,40,0,7)
 ATitle.BackgroundTransparency=1; ATitle.Text="ALEX NEARBY"
 ATitle.TextColor3=Color3.new(1,1,1); ATitle.Font=Enum.Font.GothamBlack
 ATitle.TextSize=13; ATitle.TextXAlignment=Enum.TextXAlignment.Left; ATitle.ZIndex=201
-
 local ASub=Instance.new("TextLabel",AlertBanner)
 ASub.Size=UDim2.new(1,-44,0,15); ASub.Position=UDim2.new(0,40,0,29)
 ASub.BackgroundTransparency=1; ASub.Text="Image entity  ·  00 studs"
 ASub.TextColor3=Color3.fromRGB(255,170,170); ASub.Font=Enum.Font.GothamSemibold
 ASub.TextSize=9; ASub.TextXAlignment=Enum.TextXAlignment.Left; ASub.ZIndex=201
 
-local alertHideTask = nil
-local alertShowing  = false
-
+local alertHideTask=nil; local alertShowing=false
 local function showAlert(label, dist, col)
-    local r,g,b = math.floor(col.R*255), math.floor(col.G*255), math.floor(col.B*255)
-    local function dim(v) return math.max(0, math.floor(v*0.55)) end
-    AlertBanner.BackgroundColor3 = Color3.fromRGB(dim(r), dim(g), dim(b))
-    AStroke.Color = col
-    ABGrad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(math.min(255,math.floor(r*0.65)), math.min(255,math.floor(g*0.32)), math.min(255,math.floor(b*0.32)))),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(math.min(255,math.floor(r*0.36)), math.min(255,math.floor(g*0.18)), math.min(255,math.floor(b*0.18)))),
+    local r,g,b=math.floor(col.R*255),math.floor(col.G*255),math.floor(col.B*255)
+    local function dim(v) return math.max(0,math.floor(v*0.55)) end
+    AlertBanner.BackgroundColor3=Color3.fromRGB(dim(r),dim(g),dim(b))
+    AStroke.Color=col
+    ABGrad.Color=ColorSequence.new{
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(math.min(255,math.floor(r*0.65)),math.min(255,math.floor(g*0.32)),math.min(255,math.floor(b*0.32)))),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(math.min(255,math.floor(r*0.36)),math.min(255,math.floor(g*0.18)),math.min(255,math.floor(b*0.18)))),
     }
-    ATitle.Text       = "⚠  "..label.." NEARBY"
-    ATitle.TextColor3 = col
-    ASub.Text         = "Image entity  ·  "..math.floor(dist).." studs away"
-    ASub.TextColor3   = Color3.fromRGB(
-        math.min(255, math.floor(r*0.9+120)),
-        math.min(255, math.floor(g*0.5+100)),
-        math.min(255, math.floor(b*0.5+100))
-    )
+    ATitle.Text="⚠  "..label.." NEARBY"; ATitle.TextColor3=col
+    ASub.Text="Image entity  ·  "..math.floor(dist).." studs away"
+    ASub.TextColor3=Color3.fromRGB(math.min(255,math.floor(r*0.9+120)),math.min(255,math.floor(g*0.5+100)),math.min(255,math.floor(b*0.5+100)))
     if not alertShowing then
-        alertShowing = true
-        AlertBanner.Visible = true
-        tw(AlertBanner, 0.20, {Position=UDim2.new(0.5,0,0,12)})
+        alertShowing=true; AlertBanner.Visible=true
+        tw(AlertBanner,0.20,{Position=UDim2.new(0.5,0,0,12)})
     end
     task.spawn(function()
-        for _=1,2 do
-            tw(AStroke,0.15,{Transparency=0.75}); task.wait(0.2)
-            tw(AStroke,0.15,{Transparency=0});    task.wait(0.2)
-        end
+        for _=1,2 do tw(AStroke,0.15,{Transparency=0.75}); task.wait(0.2); tw(AStroke,0.15,{Transparency=0}); task.wait(0.2) end
     end)
     if alertHideTask then task.cancel(alertHideTask) end
-    alertHideTask = task.delay(4.5, function()
-        tw(AlertBanner, 0.20, {Position=UDim2.new(0.5,0,-0.18,0)})
+    alertHideTask=task.delay(4.5,function()
+        tw(AlertBanner,0.20,{Position=UDim2.new(0.5,0,-0.18,0)})
         task.wait(0.26); AlertBanner.Visible=false; alertShowing=false; alertHideTask=nil
     end)
 end
 
--- ── NOTIFICATION STRIP ───────────────────────────────────────
 local NotifStrip=Instance.new("Frame",Main)
-NotifStrip.Size=UDim2.new(1,0,0,0); NotifStrip.Position=UDim2.new(0,0,0,52)
+NotifStrip.Size=UDim2.new(1,0,0,0); NotifStrip.Position=UDim2.new(0,0,0,TITLE_BOTTOM)
 NotifStrip.BackgroundColor3=Color3.fromRGB(0,50,104); NotifStrip.BorderSizePixel=0
 NotifStrip.ClipsDescendants=true; NotifStrip.ZIndex=8
-
 local NotifAccentBar=Instance.new("Frame",NotifStrip)
-NotifAccentBar.Size=UDim2.new(0,3,1,0); NotifAccentBar.Position=UDim2.new(0,0,0,0)
-NotifAccentBar.BackgroundColor3=W.accent; NotifAccentBar.BorderSizePixel=0; NotifAccentBar.ZIndex=10
-
+NotifAccentBar.Size=UDim2.new(0,3,1,0); NotifAccentBar.BackgroundColor3=W.accent
+NotifAccentBar.BorderSizePixel=0; NotifAccentBar.ZIndex=10
 local NotifTxt=Instance.new("TextLabel",NotifStrip)
 NotifTxt.Size=UDim2.new(1,-18,1,0); NotifTxt.Position=UDim2.new(0,14,0,0)
 NotifTxt.BackgroundTransparency=1; NotifTxt.Text=""
 NotifTxt.TextColor3=Color3.fromRGB(196,224,255); NotifTxt.Font=Enum.Font.GothamSemibold
-NotifTxt.TextSize=10; NotifTxt.TextXAlignment=Enum.TextXAlignment.Left; NotifTxt.ZIndex=9
+NotifTxt.TextSize=IS_MOBILE and 9 or 10; NotifTxt.TextXAlignment=Enum.TextXAlignment.Left; NotifTxt.ZIndex=9
 
 local notifQ={}; local notifBusy=false
 local function notify(msg, color)
@@ -700,14 +920,13 @@ local function notify(msg, color)
         while #notifQ>0 do
             local n=table.remove(notifQ,1)
             NotifTxt.Text="  "..n.msg; NotifTxt.TextColor3=n.col
-            local bgCol =
+            NotifStrip.BackgroundColor3=
                 n.col==W.danger  and Color3.fromRGB(64,8,8)   or
                 n.col==W.success and Color3.fromRGB(6,32,6)   or
                 n.col==W.teal    and Color3.fromRGB(0,32,36)  or
                 Color3.fromRGB(0,46,96)
-            NotifStrip.BackgroundColor3=bgCol
             tw(NotifAccentBar,0.08,{BackgroundColor3=n.col})
-            tw(NotifStrip,0.13,{Size=UDim2.new(1,0,0,20)})
+            tw(NotifStrip,0.13,{Size=UDim2.new(1,0,0,sp(20))})
             task.wait(2.6)
             tw(NotifStrip,0.13,{Size=UDim2.new(1,0,0,0)})
             tw(NotifAccentBar,0.13,{BackgroundColor3=W.accent})
@@ -717,58 +936,57 @@ local function notify(msg, color)
     end)
 end
 
--- ── TAB BAR ──────────────────────────────────────────────────
+local TAB_Y      = TITLE_BOTTOM
+local TAB_H      = sp(36)
 local TabBar=Instance.new("Frame",Main)
-TabBar.Size=UDim2.new(1,0,0,36); TabBar.Position=UDim2.new(0,0,0,52)
+TabBar.Size=UDim2.new(1,0,0,TAB_H); TabBar.Position=UDim2.new(0,0,0,TAB_Y)
 TabBar.BackgroundColor3=W.bg; TabBar.BorderSizePixel=0; TabBar.ZIndex=2
 do
     local ll=Instance.new("UIListLayout",TabBar)
     ll.FillDirection=Enum.FillDirection.Horizontal
     ll.VerticalAlignment=Enum.VerticalAlignment.Center
     ll.Padding=UDim.new(0,0)
-    Instance.new("UIPadding",TabBar).PaddingLeft=UDim.new(0,10)
+    Instance.new("UIPadding",TabBar).PaddingLeft=UDim.new(0,sp(10))
 end
 
+local TAB_SEP_Y  = TAB_Y + TAB_H
 local TabSep=Instance.new("Frame",Main)
-TabSep.Size=UDim2.new(1,0,0,1); TabSep.Position=UDim2.new(0,0,0,88)
+TabSep.Size=UDim2.new(1,0,0,1); TabSep.Position=UDim2.new(0,0,0,TAB_SEP_Y)
 TabSep.BackgroundColor3=W.sep; TabSep.BorderSizePixel=0
 
+local CONTENT_Y  = TAB_SEP_Y + 1
 local CA=Instance.new("Frame",Main)
-CA.Size=UDim2.new(1,0,1,-90); CA.Position=UDim2.new(0,0,0,90)
+CA.Size=UDim2.new(1,0,1,-(CONTENT_Y)); CA.Position=UDim2.new(0,0,0,CONTENT_Y)
 CA.BackgroundTransparency=1; CA.BorderSizePixel=0; CA.ClipsDescendants=true
 
--- ================================================================
---  TAB SYSTEM
--- ================================================================
 local tabs={}; local activeN=nil
 
 local TDEFS={
-    {n="ESP",    w=58},
-    {n="WORLD",  w=60},
-    {n="PLAYER", w=65},
-    {n="UTILS",  w=58},
-    {n="LOG",    w=50},
+    {n="ESP",    w=sp(58)},
+    {n="WORLD",  w=sp(60)},
+    {n="PLAYER", w=sp(65)},
+    {n="UTILS",  w=sp(58)},
+    {n="LOG",    w=sp(50)},
 }
 
 local function newPage()
     local sf=Instance.new("ScrollingFrame",CA)
     sf.Size=UDim2.new(1,0,1,0); sf.BackgroundTransparency=1
-    sf.BorderSizePixel=0; sf.ScrollBarThickness=2
+    sf.BorderSizePixel=0; sf.ScrollBarThickness=IS_MOBILE and 4 or 2
     sf.ScrollBarImageColor3=W.accent
     sf.CanvasSize=UDim2.new(0,0,0,0); sf.AutomaticCanvasSize=Enum.AutomaticSize.Y
     sf.Visible=false
     local pad=Instance.new("UIPadding",sf)
-    pad.PaddingLeft=UDim.new(0,12); pad.PaddingRight=UDim.new(0,12)
-    pad.PaddingTop=UDim.new(0,10); pad.PaddingBottom=UDim.new(0,14)
+    pad.PaddingLeft=UDim.new(0,sp(12)); pad.PaddingRight=UDim.new(0,sp(12))
+    pad.PaddingTop=UDim.new(0,sp(10)); pad.PaddingBottom=UDim.new(0,sp(14))
     local ll=Instance.new("UIListLayout",sf)
-    ll.Padding=UDim.new(0,7); ll.HorizontalAlignment=Enum.HorizontalAlignment.Center
+    ll.Padding=UDim.new(0,sp(7)); ll.HorizontalAlignment=Enum.HorizontalAlignment.Center
     ll.SortOrder=Enum.SortOrder.LayoutOrder
     return sf
 end
 
 local function switchTab(name)
-    if activeN==name then return end
-    activeN=name
+    if activeN==name then return end; activeN=name
     for _,t in ipairs(tabs) do
         local on=t.n==name
         t.page.Visible=on
@@ -780,9 +998,10 @@ end
 for _,d in ipairs(TDEFS) do
     local page=newPage()
     local btn=Instance.new("TextButton",TabBar)
-    btn.Size=UDim2.new(0,d.w,0,34); btn.BackgroundTransparency=1
+    btn.Size=UDim2.new(0,d.w,0,TAB_H); btn.BackgroundTransparency=1
     btn.BorderSizePixel=0; btn.Text=d.n; btn.TextColor3=W.txtHint
-    btn.Font=Enum.Font.GothamSemibold; btn.TextSize=10; btn.AutoButtonColor=false; btn.ZIndex=3
+    btn.Font=Enum.Font.GothamSemibold; btn.TextSize=IS_MOBILE and 9 or 10
+    btn.AutoButtonColor=false; btn.ZIndex=3
     local ind=Instance.new("Frame",btn)
     ind.Size=UDim2.new(0.68,0,0,2); ind.Position=UDim2.new(0.16,0,1,-2)
     ind.BackgroundColor3=W.accent; ind.BorderSizePixel=0; ind.BackgroundTransparency=1; ind.ZIndex=4
@@ -797,50 +1016,45 @@ for _,d in ipairs(TDEFS) do
 end
 switchTab("ESP")
 
--- ================================================================
---  WIDGET BUILDERS
--- ================================================================
 local function getPage(n)
     for _,t in ipairs(tabs) do if t.n==n then return t.page end end
 end
 
-local function sec(page,text)
+local function sec(page, text)
     local f=Instance.new("Frame",page)
-    f.Size=UDim2.new(1,0,0,22); f.BackgroundTransparency=1; f.BorderSizePixel=0
-
+    f.Size=UDim2.new(1,0,0,sp(22)); f.BackgroundTransparency=1; f.BorderSizePixel=0
     local pill=Instance.new("Frame",f)
     pill.Size=UDim2.new(0,3,0,14); pill.Position=UDim2.new(0,0,0.5,-7)
     pill.BackgroundColor3=W.accent; pill.BorderSizePixel=0
     Instance.new("UICorner",pill).CornerRadius=UDim.new(1,0)
     local pg=Instance.new("UIGradient",pill)
-    pg.Color=ColorSequence.new{
-        ColorSequenceKeypoint.new(0, W.accent),
-        ColorSequenceKeypoint.new(1, W.accentPurp),
-    }
+    pg.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,W.accent),ColorSequenceKeypoint.new(1,W.accentPurp)}
     pg.Rotation=90
-
     local glowLine=Instance.new("Frame",f)
     glowLine.Size=UDim2.new(1,-14,0,1); glowLine.Position=UDim2.new(0,8,0.5,0)
     glowLine.BackgroundColor3=W.sep; glowLine.BorderSizePixel=0
     Instance.new("UIGradient",glowLine).Color=ColorSequence.new{
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(60,60,90)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(28,28,38)),
+        ColorSequenceKeypoint.new(0,Color3.fromRGB(60,60,90)),
+        ColorSequenceKeypoint.new(1,Color3.fromRGB(28,28,38)),
     }
-
     local lbl=Instance.new("TextLabel",f)
     lbl.Size=UDim2.new(1,0,1,0); lbl.Position=UDim2.new(0,10,0,0)
     lbl.BackgroundTransparency=1; lbl.Text=text:upper()
-    lbl.TextColor3=Color3.fromRGB(100,100,128); lbl.Font=Enum.Font.GothamBold; lbl.TextSize=9
+    lbl.TextColor3=Color3.fromRGB(100,100,128); lbl.Font=Enum.Font.GothamBold
+    lbl.TextSize=IS_MOBILE and 8 or 9
     lbl.TextXAlignment=Enum.TextXAlignment.Left; lbl.ZIndex=2
 end
 
-local togIndex = 0
-local function tog(page,label,desc,cb,broken)
-    togIndex = togIndex + 1
-    local isAlt = (togIndex % 2 == 0)
+local pageTogCount = {}
+local pageInfCount = {}
 
+local function tog(page, label, desc, cb, broken)
+    pageTogCount[page] = (pageTogCount[page] or 0) + 1
+    local isAlt = (pageTogCount[page] % 2 == 0)
+
+    local ROW_H = IS_MOBILE and sp(60) or sp(54)
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,54); row.BorderSizePixel=0
+    row.Size=UDim2.new(1,0,0,ROW_H); row.BorderSizePixel=0
     row.BackgroundColor3= isAlt and W.surfaceAlt or W.surface
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     local rs=Instance.new("UIStroke",row); rs.Color=W.sep; rs.Thickness=1
@@ -858,39 +1072,44 @@ local function tog(page,label,desc,cb,broken)
     Instance.new("UICorner",hov).CornerRadius=UDim.new(0,8)
 
     local ll=Instance.new("TextLabel",row)
-    ll.Size=UDim2.new(1,-68,0,20); ll.Position=UDim2.new(0,13,0,9)
+    ll.Size=UDim2.new(1,-sp(68),0,sp(20)); ll.Position=UDim2.new(0,sp(13),0,sp(9))
     ll.BackgroundTransparency=1; ll.Text=label
     ll.TextColor3=broken and W.warn or W.txtPri
-    ll.Font=Enum.Font.GothamSemibold; ll.TextSize=12; ll.TextXAlignment=Enum.TextXAlignment.Left; ll.ZIndex=2
+    ll.Font=Enum.Font.GothamSemibold; ll.TextSize=IS_MOBILE and 11 or 12
+    ll.TextXAlignment=Enum.TextXAlignment.Left; ll.ZIndex=2
 
     local dl=Instance.new("TextLabel",row)
-    dl.Size=UDim2.new(1,-68,0,14); dl.Position=UDim2.new(0,13,0,30)
+    dl.Size=UDim2.new(1,-sp(68),0,sp(14)); dl.Position=UDim2.new(0,sp(13),0,sp(30))
     dl.BackgroundTransparency=1; dl.Text=desc
-    dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=10
+    dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=IS_MOBILE and 9 or 10
     dl.TextXAlignment=Enum.TextXAlignment.Left; dl.ZIndex=2
 
+    local PILL_W = IS_MOBILE and sp(44) or sp(38)
+    local PILL_H = IS_MOBILE and sp(24) or sp(20)
     local track=Instance.new("Frame",row)
-    track.Size=UDim2.new(0,38,0,20); track.Position=UDim2.new(1,-50,0.5,-10)
+    track.Size=UDim2.new(0,PILL_W,0,PILL_H); track.Position=UDim2.new(1,-PILL_W-sp(12),0.5,-PILL_H/2)
     track.BackgroundColor3=W.pillOff; track.BorderSizePixel=0; track.ZIndex=3
     Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
     local trkS=Instance.new("UIStroke",track); trkS.Color=Color3.fromRGB(84,84,108); trkS.Thickness=1
 
+    local THUMB = IS_MOBILE and sp(18) or sp(14)
     local thumb=Instance.new("Frame",track)
-    thumb.Size=UDim2.new(0,14,0,14); thumb.Position=UDim2.new(0,3,0.5,-7)
+    thumb.Size=UDim2.new(0,THUMB,0,THUMB); thumb.Position=UDim2.new(0,3,0.5,-THUMB/2)
     thumb.BackgroundColor3=Color3.fromRGB(172,172,195); thumb.BorderSizePixel=0; thumb.ZIndex=4
     Instance.new("UICorner",thumb).CornerRadius=UDim.new(1,0)
 
     local active=false
+    local THUMB_ON_X = PILL_W - THUMB - 3
     local function setState(v)
         active=v
         if v then
             tw(track,0.16,{BackgroundColor3=W.accent}); tw(trkS,0.16,{Color=W.accentHov})
-            tw(thumb,0.16,{Position=UDim2.new(0,21,0.5,-7),BackgroundColor3=Color3.new(1,1,1)})
+            tw(thumb,0.16,{Position=UDim2.new(0,THUMB_ON_X,0.5,-THUMB/2),BackgroundColor3=Color3.new(1,1,1)})
             tw(rs,0.16,{Color=W.accent}); tw(row,0.16,{BackgroundColor3=Color3.fromRGB(12,16,38)})
             tw(leftBar,0.16,{BackgroundTransparency=0})
         else
             tw(track,0.16,{BackgroundColor3=W.pillOff}); tw(trkS,0.16,{Color=Color3.fromRGB(84,84,108)})
-            tw(thumb,0.16,{Position=UDim2.new(0,3,0.5,-7),BackgroundColor3=Color3.fromRGB(172,172,195)})
+            tw(thumb,0.16,{Position=UDim2.new(0,3,0.5,-THUMB/2),BackgroundColor3=Color3.fromRGB(172,172,195)})
             tw(rs,0.16,{Color=W.sep})
             tw(row,0.16,{BackgroundColor3= isAlt and W.surfaceAlt or W.surface})
             tw(leftBar,0.16,{BackgroundTransparency=1})
@@ -905,34 +1124,59 @@ local function tog(page,label,desc,cb,broken)
     return setState
 end
 
-local function sld(page,label,desc,minV,maxV,def,cb)
+-- ============================================================
+-- FIX: Completely rewritten slider input handling for mobile.
+--
+-- Root causes of the original bug:
+--   1. MouseButton1Down never fires on touch — InputBegan must be used
+--      on mobile for the initial press detection.
+--   2. UIS:GetTouchState() returns an array of InputObjects, not a
+--      simple {Position=...} table. Indexing [1] on it gave nil, so
+--      the X coordinate was always nil, causing the slider to snap
+--      to the left edge (nil treated as 0).
+--   3. The Heartbeat loop polled GetTouchState every frame but the
+--      first touch that started the drag was already consumed, so
+--      subsequent frames saw a stale or empty table.
+--
+-- Fix strategy:
+--   • On mobile, bind InputBegan on the hit button to start dragging
+--     and record the active InputObject directly.
+--   • Track the live position through UIS.InputChanged, comparing
+--     the UserInputType to match only the touch/mouse that started
+--     the drag.
+--   • On InputEnded for that same input, clear the drag state.
+--   • Desktop path (MouseButton1Down / Heartbeat mouse poll) is
+--     kept exactly as before so nothing regresses on PC.
+-- ============================================================
+local function sld(page, label, desc, minV, maxV, def, cb)
+    local SLD_H = IS_MOBILE and sp(68) or sp(62)
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,62); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    row.Size=UDim2.new(1,0,0,SLD_H); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     Instance.new("UIStroke",row).Color=W.sep
 
     local ll=Instance.new("TextLabel",row)
-    ll.Size=UDim2.new(0.62,0,0,18); ll.Position=UDim2.new(0,13,0,8)
+    ll.Size=UDim2.new(0.62,0,0,sp(18)); ll.Position=UDim2.new(0,sp(13),0,sp(8))
     ll.BackgroundTransparency=1; ll.Text=label
-    ll.TextColor3=W.txtPri; ll.Font=Enum.Font.GothamSemibold; ll.TextSize=12
+    ll.TextColor3=W.txtPri; ll.Font=Enum.Font.GothamSemibold; ll.TextSize=IS_MOBILE and 11 or 12
     ll.TextXAlignment=Enum.TextXAlignment.Left
 
     local vl=Instance.new("TextLabel",row)
-    vl.Size=UDim2.new(0.34,0,0,18); vl.Position=UDim2.new(0.64,0,0,8)
+    vl.Size=UDim2.new(0.34,0,0,sp(18)); vl.Position=UDim2.new(0.64,0,0,sp(8))
     vl.BackgroundTransparency=1; vl.Text=tostring(def)
-    vl.TextColor3=W.accent; vl.Font=Enum.Font.GothamBold; vl.TextSize=12
+    vl.TextColor3=W.accent; vl.Font=Enum.Font.GothamBold; vl.TextSize=IS_MOBILE and 11 or 12
     vl.TextXAlignment=Enum.TextXAlignment.Right
 
     if desc~="" then
         local dl=Instance.new("TextLabel",row)
-        dl.Size=UDim2.new(1,-26,0,12); dl.Position=UDim2.new(0,13,0,26)
+        dl.Size=UDim2.new(1,-sp(26),0,sp(12)); dl.Position=UDim2.new(0,sp(13),0,sp(26))
         dl.BackgroundTransparency=1; dl.Text=desc
-        dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=9
+        dl.TextColor3=W.txtHint; dl.Font=Enum.Font.Gotham; dl.TextSize=IS_MOBILE and 8 or 9
         dl.TextXAlignment=Enum.TextXAlignment.Left
     end
 
     local trk=Instance.new("Frame",row)
-    trk.Size=UDim2.new(1,-26,0,4); trk.Position=UDim2.new(0,13,1,-14)
+    trk.Size=UDim2.new(1,-sp(26),0,IS_MOBILE and 6 or 4); trk.Position=UDim2.new(0,sp(13),1,-sp(14))
     trk.BackgroundColor3=W.sep; trk.BorderSizePixel=0
     Instance.new("UICorner",trk).CornerRadius=UDim.new(1,0)
 
@@ -944,78 +1188,153 @@ local function sld(page,label,desc,minV,maxV,def,cb)
         ColorSequenceKeypoint.new(0,W.accent), ColorSequenceKeypoint.new(1,W.accentPurp)
     }
 
+    local DOT_S = IS_MOBILE and 16 or 12
     local dot=Instance.new("Frame",trk)
-    dot.Size=UDim2.new(0,12,0,12); dot.AnchorPoint=Vector2.new(0.5,0.5)
+    dot.Size=UDim2.new(0,DOT_S,0,DOT_S); dot.AnchorPoint=Vector2.new(0.5,0.5)
     dot.Position=UDim2.new((def-minV)/(maxV-minV),0,0.5,0)
     dot.BackgroundColor3=Color3.new(1,1,1); dot.BorderSizePixel=0; dot.ZIndex=3
     Instance.new("UICorner",dot).CornerRadius=UDim.new(1,0)
     local dotS=Instance.new("UIStroke",dot); dotS.Color=W.accent; dotS.Thickness=1.5
 
-    local dragging=false
-    local hb=Instance.new("TextButton",trk)
-    hb.Size=UDim2.new(1,0,0,26); hb.Position=UDim2.new(0,0,0.5,-13)
-    hb.BackgroundTransparency=1; hb.Text=""; hb.ZIndex=10
-    local function upd(mx)
-        local t=math.clamp((mx-trk.AbsolutePosition.X)/trk.AbsoluteSize.X,0,1)
-        local v=math.floor(minV+t*(maxV-minV))
-        fill.Size=UDim2.new(t,0,1,0); dot.Position=UDim2.new(t,0,0.5,0)
-        vl.Text=tostring(v); cb(v)
+    -- Shared update function: given a screen X, compute and apply value
+    local function upd(screenX)
+        local trkAbsX  = trk.AbsolutePosition.X
+        local trkAbsW  = trk.AbsoluteSize.X
+        local t = math.clamp((screenX - trkAbsX) / trkAbsW, 0, 1)
+        local v = math.floor(minV + t * (maxV - minV))
+        fill.Size       = UDim2.new(t, 0, 1, 0)
+        dot.Position    = UDim2.new(t, 0, 0.5, 0)
+        vl.Text         = tostring(v)
+        cb(v)
     end
-    hb.MouseButton1Down:Connect(function() dragging=true; tw(dot,0.1,{Size=UDim2.new(0,16,0,16)}) end)
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType==Enum.UserInputType.MouseButton1 then
-            dragging=false; tw(dot,0.1,{Size=UDim2.new(0,12,0,12)})
-        end
-    end)
-    RS.Heartbeat:Connect(function() if dragging then upd(UIS:GetMouseLocation().X) end end)
-    hb.MouseButton1Click:Connect(function() upd(UIS:GetMouseLocation().X) end)
+
+    -- Enlarged invisible hit region so the whole row area is draggable
+    local HIT_PAD = IS_MOBILE and 22 or 13
+    local hb = Instance.new("TextButton", trk)
+    hb.Size              = UDim2.new(1, 0, 0, HIT_PAD * 2)
+    hb.Position          = UDim2.new(0, 0, 0.5, -HIT_PAD)
+    hb.BackgroundTransparency = 1
+    hb.Text              = ""
+    hb.ZIndex            = 10
+
+    local dragging        = false
+    local activeInputObj  = nil   -- FIX: track the specific InputObject
+
+    if IS_MOBILE then
+        -- FIX: Use InputBegan to capture the touch InputObject directly,
+        -- then track it in InputChanged and release in InputEnded.
+        hb.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                dragging       = true
+                activeInputObj = input
+                tw(dot, 0.1, {Size = UDim2.new(0, DOT_S+5, 0, DOT_S+5)})
+                upd(input.Position.X)
+            end
+        end)
+
+        -- FIX: InputChanged fires every frame a touch moves; we read the
+        -- position directly from the InputObject captured above.
+        UIS.InputChanged:Connect(function(input)
+            if dragging and activeInputObj and input == activeInputObj then
+                upd(input.Position.X)
+            end
+        end)
+
+        UIS.InputEnded:Connect(function(input)
+            if input == activeInputObj then
+                dragging       = false
+                activeInputObj = nil
+                tw(dot, 0.1, {Size = UDim2.new(0, DOT_S, 0, DOT_S)})
+            end
+        end)
+
+        -- Tap-without-drag still moves the slider to the tap position
+        hb.MouseButton1Click:Connect(function()
+            local touches = UIS:GetTouchState()
+            -- On a tap-release there may be no active touches; fall back
+            -- to the last known AbsolutePosition from the track center
+            if touches and #touches > 0 then
+                upd(touches[1].Position.X)
+            end
+        end)
+    else
+        -- Desktop path: unchanged from original
+        hb.MouseButton1Down:Connect(function()
+            dragging = true
+            tw(dot, 0.1, {Size = UDim2.new(0, DOT_S+4, 0, DOT_S+4)})
+        end)
+
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+                tw(dot, 0.1, {Size = UDim2.new(0, DOT_S, 0, DOT_S)})
+            end
+        end)
+
+        RS.Heartbeat:Connect(function()
+            if dragging then
+                upd(UIS:GetMouseLocation().X)
+            end
+        end)
+
+        hb.MouseButton1Click:Connect(function()
+            upd(UIS:GetMouseLocation().X)
+        end)
+    end
 end
 
-local infIndex = 0
-local function inf(page,label)
-    infIndex = infIndex + 1
-    local isAlt = (infIndex % 2 == 0)
+local function inf(page, label)
+    pageInfCount[page] = (pageInfCount[page] or 0) + 1
+    local isAlt = (pageInfCount[page] % 2 == 0)
 
+    local INF_H = IS_MOBILE and sp(40) or sp(36)
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,36)
+    row.Size=UDim2.new(1,0,0,INF_H)
     row.BackgroundColor3= isAlt and W.surfaceAlt or W.surface
     row.BorderSizePixel=0
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     Instance.new("UIStroke",row).Color=W.sep
 
     local lbl=Instance.new("TextLabel",row)
-    lbl.Size=UDim2.new(0.52,0,1,0); lbl.Position=UDim2.new(0,13,0,0)
+    lbl.Size=UDim2.new(0.52,0,1,0); lbl.Position=UDim2.new(0,sp(13),0,0)
     lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=W.txtHint
-    lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.Font=Enum.Font.Gotham; lbl.TextSize=IS_MOBILE and 10 or 11
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
 
     local vl=Instance.new("TextLabel",row)
     vl.Size=UDim2.new(0.44,0,1,0); vl.Position=UDim2.new(0.52,0,0,0)
     vl.BackgroundTransparency=1; vl.Text="—"; vl.TextColor3=W.txtPri
-    vl.Font=Enum.Font.GothamSemibold; vl.TextSize=11; vl.TextXAlignment=Enum.TextXAlignment.Right
-
+    vl.Font=Enum.Font.GothamSemibold; vl.TextSize=IS_MOBILE and 10 or 11
+    vl.TextXAlignment=Enum.TextXAlignment.Right
     return vl
 end
 
-local function actbtn(page,label,desc,btnTxt,color,cb)
+local function actbtn(page, label, desc, btnTxt, color, cb)
+    local BTN_H = IS_MOBILE and sp(56) or sp(50)
     local row=Instance.new("Frame",page)
-    row.Size=UDim2.new(1,0,0,50); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
+    row.Size=UDim2.new(1,0,0,BTN_H); row.BackgroundColor3=W.surface; row.BorderSizePixel=0
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,8)
     Instance.new("UIStroke",row).Color=W.sep
     local ll=Instance.new("TextLabel",row)
-    ll.Size=UDim2.new(1,-104,0,20); ll.Position=UDim2.new(0,13,0,8)
+    ll.Size=UDim2.new(1,-sp(104),0,sp(20)); ll.Position=UDim2.new(0,sp(13),0,sp(8))
     ll.BackgroundTransparency=1; ll.Text=label; ll.TextColor3=W.txtPri
-    ll.Font=Enum.Font.GothamSemibold; ll.TextSize=12; ll.TextXAlignment=Enum.TextXAlignment.Left
+    ll.Font=Enum.Font.GothamSemibold; ll.TextSize=IS_MOBILE and 11 or 12
+    ll.TextXAlignment=Enum.TextXAlignment.Left
     if desc~="" then
         local dl=Instance.new("TextLabel",row)
-        dl.Size=UDim2.new(1,-104,0,13); dl.Position=UDim2.new(0,13,0,28)
+        dl.Size=UDim2.new(1,-sp(104),0,sp(13)); dl.Position=UDim2.new(0,sp(13),0,sp(28))
         dl.BackgroundTransparency=1; dl.Text=desc; dl.TextColor3=W.txtHint
-        dl.Font=Enum.Font.Gotham; dl.TextSize=9; dl.TextXAlignment=Enum.TextXAlignment.Left
+        dl.Font=Enum.Font.Gotham; dl.TextSize=IS_MOBILE and 8 or 9
+        dl.TextXAlignment=Enum.TextXAlignment.Left
     end
     local c=color or W.accent
+    local BTN_W = IS_MOBILE and sp(90) or sp(84)
+    local BTN_BH = IS_MOBILE and sp(32) or sp(28)
     local ab=Instance.new("TextButton",row)
-    ab.Size=UDim2.new(0,84,0,28); ab.Position=UDim2.new(1,-96,0.5,-14)
+    ab.Size=UDim2.new(0,BTN_W,0,BTN_BH); ab.Position=UDim2.new(1,-BTN_W-sp(12),0.5,-BTN_BH/2)
     ab.BackgroundColor3=c; ab.Text=btnTxt; ab.TextColor3=Color3.new(1,1,1)
-    ab.Font=Enum.Font.GothamBold; ab.TextSize=10; ab.BorderSizePixel=0; ab.AutoButtonColor=false; ab.ZIndex=3
+    ab.Font=Enum.Font.GothamBold; ab.TextSize=IS_MOBILE and 11 or 10
+    ab.BorderSizePixel=0; ab.AutoButtonColor=false; ab.ZIndex=3
     Instance.new("UICorner",ab).CornerRadius=UDim.new(0,6)
     ab.MouseEnter:Connect(function() tw(ab,0.1,{BackgroundColor3=Color3.fromRGB(math.min(255,c.R*255+16),math.min(255,c.G*255+16),math.min(255,c.B*255+16))}) end)
     ab.MouseLeave:Connect(function() tw(ab,0.1,{BackgroundColor3=c}) end)
@@ -1061,33 +1380,174 @@ local function changeEntry(page,ver,date,entries)
     end
 end
 
--- ================================================================
---  POPULATE TABS
--- ================================================================
+local RADAR_SIZE  = IS_MOBILE and 140 or 120
+local RADAR_RANGE = 80
+local RADAR_DOT   = 5
 
--- ── ESP ──────────────────────────────────────────────────────────
+local RadarFrame = Instance.new("Frame", SG)
+RadarFrame.Name   = "UHRadar"
+RadarFrame.Size   = UDim2.new(0, RADAR_SIZE, 0, RADAR_SIZE)
+RadarFrame.Position = UDim2.new(1, -(RADAR_SIZE+14), 0, 14)
+RadarFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 18)
+RadarFrame.BackgroundTransparency = 0.18
+RadarFrame.BorderSizePixel = 0
+RadarFrame.ClipsDescendants = true
+RadarFrame.Visible = false
+RadarFrame.ZIndex  = 180
+RadarFrame.Active  = true
+RadarFrame.Draggable = true
+Instance.new("UICorner", RadarFrame).CornerRadius = UDim.new(1, 0)
+
+local RadarRing = Instance.new("UIStroke", RadarFrame)
+RadarRing.Color = Color3.fromRGB(0, 88, 200)
+RadarRing.Thickness = 1.5
+
+for _, frac in ipairs({0.5}) do
+    local ring = Instance.new("Frame", RadarFrame)
+    ring.Size = UDim2.new(frac, 0, frac, 0)
+    ring.Position = UDim2.new((1-frac)/2, 0, (1-frac)/2, 0)
+    ring.BackgroundTransparency = 1
+    ring.BorderSizePixel = 0
+    ring.ZIndex = 181
+    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+    local rs = Instance.new("UIStroke", ring)
+    rs.Color = Color3.fromRGB(30, 50, 80); rs.Thickness = 1; rs.Transparency = 0.55
+end
+
+for _, h in ipairs({true, false}) do
+    local line = Instance.new("Frame", RadarFrame)
+    line.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
+    line.BorderSizePixel  = 0; line.ZIndex = 181
+    if h then line.Size = UDim2.new(1,0,0,1); line.Position = UDim2.new(0,0,0.5,0)
+    else      line.Size = UDim2.new(0,1,1,0); line.Position = UDim2.new(0.5,0,0,0) end
+end
+
+local selfDot = Instance.new("Frame", RadarFrame)
+selfDot.Size = UDim2.new(0, 6, 0, 6); selfDot.AnchorPoint = Vector2.new(0.5, 0.5)
+selfDot.Position = UDim2.new(0.5, 0, 0.5, 0)
+selfDot.BackgroundColor3 = Color3.new(1,1,1); selfDot.BorderSizePixel=0; selfDot.ZIndex=184
+Instance.new("UICorner", selfDot).CornerRadius = UDim.new(1,0)
+
+local radarLbl = Instance.new("TextLabel", RadarFrame)
+radarLbl.Size = UDim2.new(1, 0, 0, 14); radarLbl.Position = UDim2.new(0,0,1,-15)
+radarLbl.BackgroundTransparency=1; radarLbl.Text = "radar  "..RADAR_RANGE.."st"
+radarLbl.TextColor3=Color3.fromRGB(40,80,140); radarLbl.Font=Enum.Font.Gotham
+radarLbl.TextSize=8; radarLbl.ZIndex=185
+
+local DOT_POOL_SIZE = 64
+local dotPool = {}
+for i=1,DOT_POOL_SIZE do
+    local d = Instance.new("Frame", RadarFrame)
+    d.Size = UDim2.new(0, RADAR_DOT, 0, RADAR_DOT)
+    d.AnchorPoint = Vector2.new(0.5, 0.5)
+    d.BackgroundColor3 = W.danger
+    d.BorderSizePixel  = 0
+    d.ZIndex = 183
+    d.Visible = false
+    Instance.new("UICorner", d).CornerRadius = UDim.new(1,0)
+    dotPool[i] = d
+end
+
+local function worldToRadar(selfPos, selfLookXZ, targetPos)
+    local delta = targetPos - selfPos
+    local dx, dz = delta.X, delta.Z
+    local cos, sin = selfLookXZ.X, selfLookXZ.Z
+    local rx =  dx*cos + dz*sin
+    local ry = -dx*sin + dz*cos
+    local scale = (RADAR_SIZE/2) / RADAR_RANGE
+    return rx*scale, ry*scale
+end
+
+task.spawn(function()
+    while task.wait(0.06) do
+        if not F.RadarEnabled then continue end
+        local hrp = getHRP(); if not hrp then continue end
+        local selfPos = hrp.Position
+        local look    = hrp.CFrame.LookVector
+        local lookXZ  = Vector3.new(look.X, 0, look.Z).Unit
+
+        local poolIdx = 0
+        local half = RADAR_SIZE / 2
+
+        local function placeDot(wx, wy, col)
+            poolIdx += 1
+            if poolIdx > DOT_POOL_SIZE then return end
+            local d = dotPool[poolIdx]
+            d.BackgroundColor3 = col
+            d.Position = UDim2.new(0, half+wx - RADAR_DOT/2, 0, half+wy - RADAR_DOT/2)
+            d.Visible = true
+        end
+
+        for _, data in pairs(entityCache) do
+            if data.pp then
+                local rx, ry = worldToRadar(selfPos, lookXZ, data.pp.Position)
+                if math.abs(rx) <= half and math.abs(ry) <= half then
+                    placeDot(rx, ry, W.danger)
+                end
+            end
+        end
+
+        local scrapDrawn = 0
+        for obj in pairs(scrapCache) do
+            if scrapDrawn >= 20 then break end
+            local pos
+            if obj:IsA("BasePart") and obj.Parent then pos = obj.Position
+            elseif obj:IsA("Model") and obj.PrimaryPart and obj.Parent then pos = obj.PrimaryPart.Position end
+            if pos then
+                local rx, ry = worldToRadar(selfPos, lookXZ, pos)
+                if math.abs(rx) <= half and math.abs(ry) <= half then
+                    placeDot(rx, ry, W.gold); scrapDrawn += 1
+                end
+            end
+        end
+
+        for obj in pairs(cpCache) do
+            if obj.Parent then
+                local pos
+                if obj:IsA("BasePart") then pos = obj.Position
+                elseif obj:IsA("Model") and obj.PrimaryPart then pos = obj.PrimaryPart.Position end
+                if pos then
+                    local rx, ry = worldToRadar(selfPos, lookXZ, pos)
+                    if math.abs(rx) <= half and math.abs(ry) <= half then
+                        placeDot(rx, ry, W.teal)
+                    end
+                end
+            end
+        end
+
+        for _, p in ipairs(PLR:GetPlayers()) do
+            if p ~= LP and p.Character then
+                local rp = p.Character:FindFirstChild("HumanoidRootPart")
+                if rp then
+                    local rx, ry = worldToRadar(selfPos, lookXZ, rp.Position)
+                    if math.abs(rx) <= half and math.abs(ry) <= half then
+                        placeDot(rx, ry, W.success)
+                    end
+                end
+            end
+        end
+
+        for i=poolIdx+1, DOT_POOL_SIZE do
+            dotPool[i].Visible = false
+        end
+    end
+    for i=1,DOT_POOL_SIZE do dotPool[i].Visible=false end
+end)
+
 local EP=getPage("ESP")
 sec(EP,"Entities")
 tog(EP,"Entity ESP","Labels + distance on all entity models",function(v)
     F.EntityESP=v
-    if not v then
-        for m in pairs(entityCache) do
-            local t=m:FindFirstChild("UnitTag"); if t then t:Destroy() end
-        end
-    end
+    if not v then for m in pairs(entityCache) do local t=m:FindFirstChild("UnitTag"); if t then t:Destroy() end end end
 end)
 tog(EP,"Entity Chams","Wall-visible highlight on all entity models",function(v)
     F.EntityChams=v
-    if not v then
-        for m in pairs(entityCache) do
-            local h=m:FindFirstChild("ChamsHL"); if h then h:Destroy() end
-        end
-    end
+    if not v then for m in pairs(entityCache) do local h=m:FindFirstChild("ChamsHL"); if h then h:Destroy() end end end
 end)
 
 sec(EP,"Image Entities  (2D sprites)")
 local imgCard=Instance.new("Frame",EP)
-imgCard.Size=UDim2.new(1,0,0,40); imgCard.BackgroundColor3=Color3.fromRGB(32,18,8)
+imgCard.Size=UDim2.new(1,0,0,sp(40)); imgCard.BackgroundColor3=Color3.fromRGB(32,18,8)
 imgCard.BorderSizePixel=0
 Instance.new("UICorner",imgCard).CornerRadius=UDim.new(0,8)
 Instance.new("UIStroke",imgCard).Color=Color3.fromRGB(108,54,8)
@@ -1099,35 +1559,28 @@ imgL.TextColor3=Color3.fromRGB(210,148,72); imgL.Font=Enum.Font.Gotham
 imgL.TextSize=9; imgL.TextWrapped=true; imgL.TextXAlignment=Enum.TextXAlignment.Left
 
 tog(EP,"Image Entity Alerts","Banner + notify when Alex or Angry Munci is near",function(v)
-    F.ImageAlert=v
-    notify(v and "Image entity alerts on" or "Image entity alerts off", v and W.success or W.warn)
+    F.ImageAlert=v; notify(v and "Image entity alerts on" or "Image entity alerts off", v and W.success or W.warn)
 end)
 
 sec(EP,"Characters")
 
 local npcBrokenCard=Instance.new("Frame",EP)
-npcBrokenCard.Size=UDim2.new(1,0,0,50); npcBrokenCard.BackgroundColor3=Color3.fromRGB(30,20,8)
+npcBrokenCard.Size=UDim2.new(1,0,0,sp(50)); npcBrokenCard.BackgroundColor3=Color3.fromRGB(30,20,8)
 npcBrokenCard.BorderSizePixel=0
 Instance.new("UICorner",npcBrokenCard).CornerRadius=UDim.new(0,8)
-local npcBrokenStroke=Instance.new("UIStroke",npcBrokenCard)
-npcBrokenStroke.Color=Color3.fromRGB(120,80,0); npcBrokenStroke.Thickness=1
-
+local npcStroke=Instance.new("UIStroke",npcBrokenCard); npcStroke.Color=Color3.fromRGB(120,80,0); npcStroke.Thickness=1
 local npcBadge=Instance.new("Frame",npcBrokenCard)
 npcBadge.Size=UDim2.new(0,52,0,16); npcBadge.Position=UDim2.new(0,12,0,9)
-npcBadge.BackgroundColor3=Color3.fromRGB(100,50,0); npcBadge.BackgroundTransparency=0.5
-npcBadge.BorderSizePixel=0
+npcBadge.BackgroundColor3=Color3.fromRGB(100,50,0); npcBadge.BackgroundTransparency=0.5; npcBadge.BorderSizePixel=0
 Instance.new("UICorner",npcBadge).CornerRadius=UDim.new(0,4)
 local npcBadgeTxt=Instance.new("TextLabel",npcBadge)
 npcBadgeTxt.Size=UDim2.new(1,0,1,0); npcBadgeTxt.BackgroundTransparency=1
 npcBadgeTxt.Text="⚠ BROKEN"; npcBadgeTxt.TextColor3=W.warn
 npcBadgeTxt.Font=Enum.Font.GothamBold; npcBadgeTxt.TextSize=8
-
 local npcTitle=Instance.new("TextLabel",npcBrokenCard)
 npcTitle.Size=UDim2.new(1,-20,0,16); npcTitle.Position=UDim2.new(0,70,0,9)
-npcTitle.BackgroundTransparency=1; npcTitle.Text="NPC ESP"
-npcTitle.TextColor3=W.warn; npcTitle.Font=Enum.Font.GothamSemibold; npcTitle.TextSize=12
-npcTitle.TextXAlignment=Enum.TextXAlignment.Left
-
+npcTitle.BackgroundTransparency=1; npcTitle.Text="NPC ESP"; npcTitle.TextColor3=W.warn
+npcTitle.Font=Enum.Font.GothamSemibold; npcTitle.TextSize=12; npcTitle.TextXAlignment=Enum.TextXAlignment.Left
 local npcDesc=Instance.new("TextLabel",npcBrokenCard)
 npcDesc.Size=UDim2.new(1,-20,0,13); npcDesc.Position=UDim2.new(0,12,0,30)
 npcDesc.BackgroundTransparency=1
@@ -1148,67 +1601,42 @@ tog(EP,"Player ESP","Green highlight + name / dist / HP on all players",function
 end)
 tog(EP,"Corpse ESP","Red highlight on PlayerCorpses",function(v)
     F.CorpseESP=v
-    if not v then
-        for obj in pairs(corpseCache) do
-            local h=obj:FindFirstChild("CorpseHL"); if h then h:Destroy() end
-        end
-    end
+    if not v then for obj in pairs(corpseCache) do local h=obj:FindFirstChild("CorpseHL"); if h then h:Destroy() end end end
 end)
 
 sec(EP,"Control Points")
-
 local cpCard=Instance.new("Frame",EP)
-cpCard.Size=UDim2.new(1,0,0,32); cpCard.BackgroundColor3=Color3.fromRGB(8,26,42)
-cpCard.BorderSizePixel=0
+cpCard.Size=UDim2.new(1,0,0,sp(32)); cpCard.BackgroundColor3=Color3.fromRGB(8,26,42); cpCard.BorderSizePixel=0
 Instance.new("UICorner",cpCard).CornerRadius=UDim.new(0,8)
-local cpCardStroke=Instance.new("UIStroke",cpCard)
-cpCardStroke.Color=Color3.fromRGB(0,80,160)
-
+Instance.new("UIStroke",cpCard).Color=Color3.fromRGB(0,80,160)
 local cpPulseDot=Instance.new("Frame",cpCard)
 cpPulseDot.Size=UDim2.new(0,6,0,6); cpPulseDot.Position=UDim2.new(1,-14,0.5,-3)
 cpPulseDot.BackgroundColor3=W.teal; cpPulseDot.BorderSizePixel=0; cpPulseDot.ZIndex=4
 Instance.new("UICorner",cpPulseDot).CornerRadius=UDim.new(1,0)
-task.spawn(function()
-    while true do
-        tw(cpPulseDot,0.5,{BackgroundTransparency=0.7}); task.wait(0.55)
-        tw(cpPulseDot,0.5,{BackgroundTransparency=0});   task.wait(0.55)
-    end
-end)
-
+task.spawn(function() while true do tw(cpPulseDot,0.5,{BackgroundTransparency=0.7}); task.wait(0.55); tw(cpPulseDot,0.5,{BackgroundTransparency=0}); task.wait(0.55) end end)
 local cpCardL=Instance.new("TextLabel",cpCard)
 cpCardL.Size=UDim2.new(1,-26,1,0); cpCardL.Position=UDim2.new(0,10,0,0)
-cpCardL.BackgroundTransparency=1
-cpCardL.Text="Auto-enables when ControlPoint instances are found in MapFolder.Round"
+cpCardL.BackgroundTransparency=1; cpCardL.Text="Auto-enables when ControlPoint instances are found in MapFolder.Round"
 cpCardL.TextColor3=Color3.fromRGB(80,160,255); cpCardL.Font=Enum.Font.Gotham
 cpCardL.TextSize=9; cpCardL.TextWrapped=true; cpCardL.TextXAlignment=Enum.TextXAlignment.Left
 
 local cpDetectLbl=Instance.new("TextLabel",EP)
-cpDetectLbl.Size=UDim2.new(1,0,0,18); cpDetectLbl.BackgroundTransparency=1
+cpDetectLbl.Size=UDim2.new(1,0,0,sp(18)); cpDetectLbl.BackgroundTransparency=1
 cpDetectLbl.Text="Watching for Control Points…"; cpDetectLbl.TextColor3=W.txtHint
-cpDetectLbl.Font=Enum.Font.Gotham; cpDetectLbl.TextSize=9
-cpDetectLbl.TextXAlignment=Enum.TextXAlignment.Center
+cpDetectLbl.Font=Enum.Font.Gotham; cpDetectLbl.TextSize=9; cpDetectLbl.TextXAlignment=Enum.TextXAlignment.Center
 
 cpESPToggleFn = tog(EP,"Control Point ESP","Teal highlight + label on each ControlPoint",function(v)
     F.ControlPointESP=v
-    if not v then
-        for obj in pairs(cpCache) do
-            local h=obj:FindFirstChild("CPESP"); if h then h:Destroy() end
-        end
-    end
+    if not v then for obj in pairs(cpCache) do local h=obj:FindFirstChild("CPESP"); if h then h:Destroy() end end end
     notify(v and "Control Point ESP on" or "Control Point ESP off", v and W.success or W.warn)
 end)
 
 sec(EP,"World")
 tog(EP,"Scrap ESP","Gold highlight on Debris > Map items",function(v)
     F.ScrapESP=v
-    if not v then
-        for obj in pairs(scrapCache) do
-            local h=obj:FindFirstChild("ScrapTag"); if h then h:Destroy() end
-        end
-    end
+    if not v then for obj in pairs(scrapCache) do local h=obj:FindFirstChild("ScrapTag"); if h then h:Destroy() end end end
 end)
 
--- ── WORLD ─────────────────────────────────────────────────────────
 local WP=getPage("WORLD")
 sec(WP,"Lighting")
 tog(WP,"FullBright","Brightness 3, clock noon, shadows off",function(v) F.FullBright=v end)
@@ -1218,21 +1646,14 @@ end)
 sec(WP,"Map Info")
 local ivMap=inf(WP,"Current map"); local ivSpawns=inf(WP,"Spawn count"); local ivSpawnP=inf(WP,"Spawns path")
 
--- ── PLAYER ────────────────────────────────────────────────────────
 local PP=getPage("PLAYER")
 sec(PP,"Movement")
 tog(PP,"Noclip","Disables collision on your character parts",function(v)
     F.Noclip=v
-    if not v then
-        local c=getChar(); if c then
-            for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=true end end
-        end
-    end
+    if not v then local c=getChar(); if c then for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=true end end end end
 end)
 sec(PP,"Stats")
-sld(PP,"Walk Speed","Multiplier on base 16  ·  re-enforced every 0.5s",1,10,1,function(v)
-    F.SpeedMult=v; applySpeed()
-end)
+sld(PP,"Walk Speed","Multiplier on base 16  ·  re-enforced every 0.5s",1,10,1,function(v) F.SpeedMult=v; applySpeed() end)
 sec(PP,"Safety")
 tog(PP,"Auto Safe Spawn","Teleports to nearest spawn when HP ≤ threshold",function(v) F.AutoSafe=v end)
 sld(PP,"HP Threshold","HP level that triggers teleport",5,95,30,function(v) F.SafeHP=v end)
@@ -1241,96 +1662,97 @@ actbtn(PP,"Teleport to Spawn","Force teleport regardless of HP","Go",W.accent,fu
     notify(ok and "Teleported to safe spawn" or "Failed: "..msg, ok and W.success or W.danger)
 end)
 
--- ── UTILS ─────────────────────────────────────────────────────────
 local UTP=getPage("UTILS")
 sec(UTP,"Live Stats")
-local ivHP=inf(UTP,"Local HP")
-local ivEntC=inf(UTP,"Entities (cached)")
-local ivCPCount=inf(UTP,"Control Points")
-local ivMap2=inf(UTP,"Active map")
-local ivSpawnC=inf(UTP,"Spawn parts")
-local ivImgEnt=inf(UTP,"Image entities nearby")
+local ivHP     = inf(UTP,"Local HP")
+local ivEntC   = inf(UTP,"Entities (cached)")
+local ivCPCount= inf(UTP,"Control Points")
+local ivMap2   = inf(UTP,"Active map")
+local ivSpawnC = inf(UTP,"Spawn parts")
+local ivImgEnt = inf(UTP,"Image entities nearby")
+
+sec(UTP,"Radar")
+tog(UTP,"Radar Overlay","Mini-map showing entities, scrap, CPs, players",function(v)
+    F.RadarEnabled=v
+    RadarFrame.Visible=v
+    if not v then for i=1,DOT_POOL_SIZE do dotPool[i].Visible=false end end
+    notify(v and "Radar enabled" or "Radar disabled", v and W.teal or W.warn)
+end)
+
+local radarLegend=Instance.new("Frame",UTP)
+radarLegend.Size=UDim2.new(1,0,0,sp(40)); radarLegend.BackgroundColor3=Color3.fromRGB(10,18,28)
+radarLegend.BorderSizePixel=0
+Instance.new("UICorner",radarLegend).CornerRadius=UDim.new(0,8)
+Instance.new("UIStroke",radarLegend).Color=Color3.fromRGB(0,60,120)
+local legendTxt=Instance.new("TextLabel",radarLegend)
+legendTxt.Size=UDim2.new(1,-12,1,0); legendTxt.Position=UDim2.new(0,10,0,0)
+legendTxt.BackgroundTransparency=1; legendTxt.TextWrapped=true
+legendTxt.Text="● Red = Entity   ● Gold = Scrap   ● Teal = Control Point   ● Green = Player   ● White = You"
+legendTxt.TextColor3=Color3.fromRGB(80,120,180); legendTxt.Font=Enum.Font.Gotham
+legendTxt.TextSize=IS_MOBILE and 8 or 9; legendTxt.TextXAlignment=Enum.TextXAlignment.Left
+
+sec(UTP,"Entity Proximity Sound")
+tog(UTP,"Entity Ping","Plays a sound ping when entity enters range",function(v)
+    F.EntityPingSounds=v
+    if v then ensurePingSound() end
+    notify(v and "Entity ping on" or "Entity ping off", v and W.success or W.warn)
+end)
+sld(UTP,"Ping Range","Studs — entity triggers sound",10,100,40,function(v) F.PingRange=v end)
 
 sec(UTP,"Pathfinding")
-ivPFStatus  = inf(UTP,"Scrap pathfind")
-ivPFSprint  = inf(UTP,"Sprint timer")
-
-sld(UTP,"Sprint Duration","Seconds to sprint per scrap run",6,30,15,function(v)
-    F.SprintDuration=v
-end)
-
+ivPFStatus = inf(UTP,"Scrap pathfind")
+ivPFSprint = inf(UTP,"Sprint timer")
+sld(UTP,"Sprint Duration","Seconds to sprint per scrap run",6,30,15,function(v) F.SprintDuration=v end)
 tog(UTP,"Pathfinding Scrap","Auto-walks to Debris.Map.Scrap — avoids Entities",function(v)
     F.PathfindScrap=v
-    if v then
-        notify("Pathfinding Scrap started", W.teal)
-        pfThread = task.spawn(runPathfindingLoop)
-    else
-        stopPathfinding("disabled")
-        notify("Pathfinding Scrap stopped", W.warn)
-    end
+    if v then notify("Pathfinding Scrap started", W.teal); pfThread=task.spawn(runPathfindingLoop)
+    else stopPathfinding("disabled"); notify("Pathfinding Scrap stopped", W.warn) end
 end)
-
 actbtn(UTP,"Run Once","Pathfind to nearest scrap once (no loop)","Run",W.teal,function()
     if pfActive then notify("Already running", W.warn); return end
     local hum=getHum(); local hrp=getHRP()
     if not hum or not hrp then notify("No character", W.danger); return end
     task.spawn(function()
-        local target, dist = getNearestScrap()
-        if not target then notify("No scrap found", W.danger); return end
-        local targetPos
-        if target:IsA("BasePart") then targetPos = target.Position
-        elseif target:IsA("Model") and target.PrimaryPart then targetPos = target.PrimaryPart.Position
-        else notify("Invalid scrap target", W.danger); return end
-        if isTooCloseToEntity(targetPos) then notify("Entity blocking scrap path", W.warn); return end
-        local path = PFS:CreatePath({AgentHeight=5,AgentRadius=2,AgentCanJump=true})
-        local ok = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
-        if not ok or path.Status == Enum.PathStatus.NoPath then notify("No path to scrap", W.danger); return end
-        hum.WalkSpeed = SPRINT_SPEED
-        local t0 = tick(); local sprintMax = F.SprintDuration
-        for _, wp in ipairs(path:GetWaypoints()) do
-            hrp = getHRP(); hum = getHum()
-            if not hrp or not hum then break end
-            if isTooCloseToEntity(hrp.Position) then hum:MoveTo(hrp.Position); notify("Entity nearby — aborted", W.warn); break end
-            if tick()-t0 >= sprintMax then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
-            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+        local target = findBestScrap(hrp.Position, nil)
+        if not target then notify("No scrap found",W.danger); return end
+        if entityNear(target.pos, PATH_BLOCK) then notify("Entity blocking scrap path",W.warn); return end
+        local path=PFS:CreatePath(PF_AGENT_PARAMS)
+        local ok=pcall(function() path:ComputeAsync(hrp.Position,target.pos) end)
+        if not ok or path.Status==Enum.PathStatus.NoPath then notify("No path to scrap",W.danger); return end
+        hum.WalkSpeed=SPRINT_SPEED; local t0=tick(); local sprintMax=F.SprintDuration
+        for _,wp in ipairs(path:GetWaypoints()) do
+            hrp=getHRP(); hum=getHum(); if not hrp or not hum then break end
+            if entityNear(hrp.Position, FLEE_TRIGGER) then hum:MoveTo(hrp.Position); notify("Entity nearby — aborted",W.warn); break end
+            if tick()-t0>=sprintMax then hum.WalkSpeed=F.OrigSpeed*F.SpeedMult end
+            if wp.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
             hum:MoveTo(wp.Position); hum.MoveToFinished:Wait()
         end
-        if hum then hum.WalkSpeed = F.OrigSpeed * F.SpeedMult end
-        notify("Reached scrap ("..math.floor(dist).." st)", W.success)
+        if hum then hum.WalkSpeed=F.OrigSpeed*F.SpeedMult end
+        notify("Reached scrap ("..math.floor(target.dist).." st)",W.success)
     end)
 end)
 
--- ── DISCORD NOTE ─────────────────────────────────────────────
 sec(UTP,"Community")
-
 local discordCard=Instance.new("Frame",UTP)
-discordCard.Size=UDim2.new(1,0,0,52); discordCard.BackgroundColor3=Color3.fromRGB(22,22,46)
-discordCard.BorderSizePixel=0
+discordCard.Size=UDim2.new(1,0,0,sp(52)); discordCard.BackgroundColor3=Color3.fromRGB(22,22,46); discordCard.BorderSizePixel=0
 Instance.new("UICorner",discordCard).CornerRadius=UDim.new(0,8)
-local dcStroke=Instance.new("UIStroke",discordCard)
-dcStroke.Color=Color3.fromRGB(88,101,242); dcStroke.Thickness=1
-
+Instance.new("UIStroke",discordCard).Color=Color3.fromRGB(88,101,242)
 local dcBar=Instance.new("Frame",discordCard)
 dcBar.Size=UDim2.new(1,0,0,2); dcBar.BackgroundColor3=Color3.fromRGB(88,101,242); dcBar.BorderSizePixel=0
 Instance.new("UICorner",dcBar).CornerRadius=UDim.new(0,8)
-
 local dcLabel=Instance.new("TextLabel",discordCard)
 dcLabel.Size=UDim2.new(1,-104,0,18); dcLabel.Position=UDim2.new(0,10,0,8)
 dcLabel.BackgroundTransparency=1; dcLabel.Text="Solo project — join the Discord"
-dcLabel.TextColor3=Color3.fromRGB(200,202,255); dcLabel.Font=Enum.Font.GothamSemibold
-dcLabel.TextSize=11; dcLabel.TextXAlignment=Enum.TextXAlignment.Left
-
+dcLabel.TextColor3=Color3.fromRGB(200,202,255); dcLabel.Font=Enum.Font.GothamSemibold; dcLabel.TextSize=11; dcLabel.TextXAlignment=Enum.TextXAlignment.Left
 local dcSub=Instance.new("TextLabel",discordCard)
 dcSub.Size=UDim2.new(1,-104,0,13); dcSub.Position=UDim2.new(0,10,0,27)
 dcSub.BackgroundTransparency=1; dcSub.Text="Feedback, bugs & updates"
-dcSub.TextColor3=Color3.fromRGB(100,104,180); dcSub.Font=Enum.Font.Gotham
-dcSub.TextSize=9; dcSub.TextXAlignment=Enum.TextXAlignment.Left
-
+dcSub.TextColor3=Color3.fromRGB(100,104,180); dcSub.Font=Enum.Font.Gotham; dcSub.TextSize=9; dcSub.TextXAlignment=Enum.TextXAlignment.Left
 local dcBtn=Instance.new("TextButton",discordCard)
 dcBtn.Size=UDim2.new(0,78,0,26); dcBtn.Position=UDim2.new(1,-88,0.5,-13)
 dcBtn.BackgroundColor3=Color3.fromRGB(88,101,242); dcBtn.Text="Join"
-dcBtn.TextColor3=Color3.new(1,1,1); dcBtn.Font=Enum.Font.GothamBold
-dcBtn.TextSize=11; dcBtn.BorderSizePixel=0; dcBtn.AutoButtonColor=false; dcBtn.ZIndex=3
+dcBtn.TextColor3=Color3.new(1,1,1); dcBtn.Font=Enum.Font.GothamBold; dcBtn.TextSize=11
+dcBtn.BorderSizePixel=0; dcBtn.AutoButtonColor=false; dcBtn.ZIndex=3
 Instance.new("UICorner",dcBtn).CornerRadius=UDim.new(0,6)
 dcBtn.MouseEnter:Connect(function() tw(dcBtn,0.1,{BackgroundColor3=Color3.fromRGB(110,124,255)}) end)
 dcBtn.MouseLeave:Connect(function() tw(dcBtn,0.1,{BackgroundColor3=Color3.fromRGB(88,101,242)}) end)
@@ -1341,17 +1763,13 @@ dcBtn.MouseButton1Click:Connect(function()
     notify("Discord link copied to clipboard!", Color3.fromRGB(140,148,255))
 end)
 
--- ── MISC ─────────────────────────────────────────────────────
 sec(UTP,"Misc")
 tog(UTP,"Anti AFK","Prevents idle auto-disconnect",function(v)
     F.AntiAFK=v
     if v then
         task.spawn(function()
             while F.AntiAFK do
-                pcall(function()
-                    game:GetService("VirtualUser"):CaptureController()
-                    game:GetService("VirtualUser"):ClickButton2(Vector2.new())
-                end)
+                pcall(function() game:GetService("VirtualUser"):CaptureController(); game:GetService("VirtualUser"):ClickButton2(Vector2.new()) end)
                 task.wait(55)
             end
         end)
@@ -1362,9 +1780,7 @@ actbtn(UTP,"Rejoin Server","Re-teleports you to this place","Rejoin",W.danger,fu
 end)
 actbtn(UTP,"Copy Position","Copies HRP position to clipboard","Copy",W.accent,function()
     local hrp=getHRP()
-    if hrp then
-        setclipboard(string.format("Vector3.new(%.2f, %.2f, %.2f)",hrp.Position.X,hrp.Position.Y,hrp.Position.Z))
-        notify("Position copied")
+    if hrp then setclipboard(string.format("Vector3.new(%.2f, %.2f, %.2f)",hrp.Position.X,hrp.Position.Y,hrp.Position.Z)); notify("Position copied")
     else notify("No character",W.danger) end
 end)
 
@@ -1380,162 +1796,115 @@ if isOwner() then
     end)
 end
 
--- ── LOG ───────────────────────────────────────────────────────────
 local CLP=getPage("LOG")
+changeEntry(CLP,"v5.7","Apr 2026",{
+    {"FIX",   "IS_MOBILE: removed 'and not KeyboardEnabled' — phones with BT keyboards now detected correctly"},
+    {"FIX",   "Slider drag on mobile: InputBegan captures touch InputObject, InputChanged tracks it per-frame"},
+    {"FIX",   "Slider no longer snaps to left on first touch (was nil from GetTouchState indexing)"},
+    {"FIX",   "Slider drag-end tied to InputEnded for specific InputObject, not global mouse1 release"},
+    {"ADD",   "Radar overlay — circular mini-map with entity/scrap/CP/player dots"},
+    {"ADD",   "Radar rotates with player heading, 64-dot pool (no create/destroy)"},
+    {"ADD",   "Entity Proximity Ping — Sound instance in HRP, pitch shifts with distance"},
+    {"ADD",   "Ping Range slider (10–100 studs) in UTILS"},
+    {"FIX",   "togIndex/infIndex now per-page via pageTogCount/pageInfCount tables"},
+    {"FIX",   "Mobile: GUI scales to viewport width (clamp 62–92%)"},
+    {"FIX",   "Mobile: toggle pill, slider dot, hit-targets all enlarged for touch"},
+    {"FIX",   "ScrollBar thickness 4px on touch devices"},
+    {"FIX",   "Main frame clamped to viewport on resize"},
+})
 changeEntry(CLP,"v5.6","Apr 2026",{
-    {"ADD",   "Discord invite card in UTILS > Community (copies link to clipboard)"},
-    {"CHANGE","SPRINT_SPEED 24 → 28"},
-    {"ADD",   "Sprint Duration slider (6–30s, default 15s)"},
-    {"ADD",   "Sprint Timer info row — live countdown while pathfinding"},
-    {"FIX",   "Run Once button uses configurable SprintDuration"},
-    {"CHANGE","NPC ESP toggle replaced with broken-feature card"},
-    {"ADD",   "Pulse dot on Control Point watcher card"},
-    {"ADD",   "Animated gradient outline on version chip"},
-    {"ADD",   "Left-border glow on toggle rows when active"},
-    {"ADD",   "Alternating row tint on tog/inf widgets"},
-    {"ADD",   "Notification strip left accent flash bar"},
-    {"ADD",   "Section headers with faint glow divider line"},
+    {"CHANGE","SPRINT_SPEED 24→28, Sprint Duration slider (6–30s default 15)"},
+    {"ADD",   "Sprint Timer row, left-border glow on active toggles"},
+    {"ADD",   "NPC ESP replaced with broken-feature card, CP pulse dot"},
+    {"ADD",   "Discord invite card in UTILS"},
 })
 changeEntry(CLP,"v5.5","Apr 2026",{
-    {"ADD",   "Control Point ESP — auto-detects CPs in MapFolder.Round"},
-    {"ADD",   "Pathfinding Scrap — walks to Debris.Map.Scrap with sprint"},
-    {"ADD",   "Entity avoidance radius (20 studs)"},
-    {"ADD",   "Run Once button — single-trip scrap pathfind"},
+    {"ADD",   "Control Point ESP, Pathfinding Scrap, entity avoidance"},
 })
-changeEntry(CLP,"v5.4","Apr 2026",{
-    {"FIX",   "Screen freeze: event-driven cache replaces GetDescendants() polling"},
-    {"CHANGE","Image entities trimmed to Alex + Angry Munci only"},
-})
-changeEntry(CLP,"v5.0–5.3","Apr 2026",{
-    {"ADD",   "Win11 theme, Mica, tabs, owner crown, image entity alerts"},
-    {"ADD",   "Entity/Scrap/Player/Corpse ESP, FullBright, Speed, Noclip"},
+changeEntry(CLP,"v5.0–5.4","Apr 2026",{
+    {"ADD",   "Win11 theme, Mica, all core ESP features, event-driven caches"},
 })
 
--- ================================================================
---  CONTROL POINT ESP RUNTIME
--- ================================================================
 task.spawn(function()
     while task.wait(0.8) do
-        if cpCount > 0 then
-            cpDetectLbl.Text = cpCount.." Control Point(s) detected in Round"
-            cpDetectLbl.TextColor3 = W.teal
-        else
-            cpDetectLbl.Text = "Watching for Control Points…"
-            cpDetectLbl.TextColor3 = W.txtHint
-        end
-        ivCPCount.Text = tostring(cpCount)
+        if cpCount>0 then cpDetectLbl.Text=cpCount.." Control Point(s) detected in Round"; cpDetectLbl.TextColor3=W.teal
+        else cpDetectLbl.Text="Watching for Control Points…"; cpDetectLbl.TextColor3=W.txtHint end
+        ivCPCount.Text=tostring(cpCount)
         if not F.ControlPointESP then continue end
         for obj in pairs(cpCache) do
             if obj.Parent and not obj:FindFirstChild("CPESP") then
-                local h = Instance.new("Highlight", obj)
-                h.Name = "CPESP"; h.FillColor = Color3.fromRGB(0, 200, 200)
-                h.OutlineColor = Color3.fromRGB(80, 255, 255); h.FillTransparency = 0.3
-                local anchor = obj:IsA("BasePart") and obj
-                    or (obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")))
+                local h=Instance.new("Highlight",obj); h.Name="CPESP"
+                h.FillColor=Color3.fromRGB(0,200,200); h.OutlineColor=Color3.fromRGB(80,255,255); h.FillTransparency=0.3
+                local anchor=obj:IsA("BasePart") and obj or (obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")))
                 if anchor then
-                    local bg = Instance.new("BillboardGui", obj)
-                    bg.Name = "CPBILL"; bg.AlwaysOnTop = true
-                    bg.Size = UDim2.new(0, 120, 0, 36); bg.Adornee = anchor
-                    local tl = Instance.new("TextLabel", bg)
-                    tl.BackgroundTransparency = 1; tl.Size = UDim2.new(1, 0, 1, 0)
-                    tl.TextColor3 = Color3.fromRGB(80, 255, 255)
-                    tl.Font = Enum.Font.GothamBold; tl.TextSize = 11
-                    tl.TextStrokeTransparency = 0.1; tl.RichText = true
+                    local bg=Instance.new("BillboardGui",obj); bg.Name="CPBILL"; bg.AlwaysOnTop=true
+                    bg.Size=UDim2.new(0,120,0,36); bg.Adornee=anchor
+                    local tl=Instance.new("TextLabel",bg); tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
+                    tl.TextColor3=Color3.fromRGB(80,255,255); tl.Font=Enum.Font.GothamBold; tl.TextSize=11
+                    tl.TextStrokeTransparency=0.1; tl.RichText=true
                     task.spawn(function()
-                        while obj.Parent ~= nil and F.ControlPointESP do
-                            local hrp = getHRP()
-                            if hrp then
-                                local dist = math.floor((hrp.Position - anchor.Position).Magnitude)
-                                tl.Text = "<b>CONTROL POINT</b>\n<font size=\"10\">"..dist.." studs</font>"
-                            end
+                        while obj.Parent~=nil and F.ControlPointESP do
+                            local hrp=getHRP(); if hrp then tl.Text="<b>CONTROL POINT</b>\n<font size=\"10\">"..math.floor((hrp.Position-anchor.Position).Magnitude).." studs</font>" end
                             task.wait(0.3)
                         end
                         pcall(function() bg:Destroy() end)
                     end)
                 end
                 task.spawn(function()
-                    while obj.Parent ~= nil and F.ControlPointESP do task.wait(0.8) end
-                    pcall(function()
-                        local e = obj:FindFirstChild("CPESP"); if e then e:Destroy() end
-                        local b = obj:FindFirstChild("CPBILL"); if b then b:Destroy() end
-                    end)
+                    while obj.Parent~=nil and F.ControlPointESP do task.wait(0.8) end
+                    pcall(function() local e=obj:FindFirstChild("CPESP"); if e then e:Destroy() end local b=obj:FindFirstChild("CPBILL"); if b then b:Destroy() end end)
                 end)
             end
         end
     end
 end)
 
--- ================================================================
---  ESP RUNTIME
--- ================================================================
 task.spawn(function()
     while task.wait(0.5) do
-        ivEntC.Text = tostring(entityCount)
-        for model, data in pairs(entityCache) do
-            if not data.pp or not data.pp.Parent then
-                data.pp = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
-            end
-            local pp = data.pp
-            if not pp then continue end
+        ivEntC.Text=tostring(entityCount)
+        for model,data in pairs(entityCache) do
+            if not data.pp or not data.pp.Parent then data.pp=model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart") end
+            local pp=data.pp; if not pp then continue end
             if F.EntityESP and not model:FindFirstChild("UnitTag") then
-                local bg=Instance.new("BillboardGui",model)
-                bg.Name="UnitTag"; bg.AlwaysOnTop=true
+                local bg=Instance.new("BillboardGui",model); bg.Name="UnitTag"; bg.AlwaysOnTop=true
                 bg.Size=UDim2.new(0,136,0,42); bg.Adornee=pp
-                local tl=Instance.new("TextLabel",bg)
-                tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
-                tl.TextColor3=Color3.fromRGB(255,68,68)
-                tl.Font=Enum.Font.GothamBold; tl.TextSize=11
+                local tl=Instance.new("TextLabel",bg); tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
+                tl.TextColor3=Color3.fromRGB(255,68,68); tl.Font=Enum.Font.GothamBold; tl.TextSize=11
                 tl.TextStrokeTransparency=0.14; tl.RichText=true
                 task.spawn(function()
                     while model.Parent~=nil and F.EntityESP do
                         local hrp=getHRP()
-                        if hrp then
-                            local dist=math.floor((hrp.Position-pp.Position).Magnitude)
-                            tl.Text="<b>"..model.Name.."</b>\n<font size=\"10\">"..dist.." studs</font>"
-                        end
+                        if hrp then tl.Text="<b>"..model.Name.."</b>\n<font size=\"10\">"..math.floor((hrp.Position-pp.Position).Magnitude).." studs</font>" end
                         task.wait(0.3)
                     end
                     pcall(function() bg:Destroy() end)
                 end)
             end
             if F.EntityChams and not model:FindFirstChild("ChamsHL") then
-                local h=Instance.new("Highlight",model)
-                h.Name="ChamsHL"; h.FillColor=Color3.fromRGB(88,0,208)
-                h.OutlineColor=Color3.fromRGB(162,68,255); h.FillTransparency=0.35
-                task.spawn(function()
-                    while model.Parent~=nil and F.EntityChams do task.wait(0.5) end
-                    pcall(function() h:Destroy() end)
-                end)
+                local h=Instance.new("Highlight",model); h.Name="ChamsHL"
+                h.FillColor=Color3.fromRGB(88,0,208); h.OutlineColor=Color3.fromRGB(162,68,255); h.FillTransparency=0.35
+                task.spawn(function() while model.Parent~=nil and F.EntityChams do task.wait(0.5) end; pcall(function() h:Destroy() end) end)
             end
         end
     end
 end)
 
--- ================================================================
---  IMAGE-ENTITY ALERT SCANNER
--- ================================================================
 task.spawn(function()
     while task.wait(0.6) do
-        if not F.ImageAlert then
-            ivImgEnt.Text="alerts off"; ivImgEnt.TextColor3=W.txtHint; continue
-        end
+        if not F.ImageAlert then ivImgEnt.Text="alerts off"; ivImgEnt.TextColor3=W.txtHint; continue end
         local hrp=getHRP(); if not hrp then continue end
-        local selfPos=hrp.Position
-        local nearestDist=math.huge; local nearestEntry=nil
-        for model, data in pairs(entityCache) do
+        local selfPos=hrp.Position; local nearestDist=math.huge; local nearestEntry=nil
+        for model,data in pairs(entityCache) do
             local entry=matchImageEntity(model.Name)
-            if entry then
-                local pp=data.pp
-                if pp then
-                    local dist=(selfPos-pp.Position).Magnitude
-                    if dist<nearestDist then nearestDist=dist; nearestEntry=entry end
-                    if dist<=ALERT_RANGE then
-                        local now=tick()
-                        if now-(imageEntityAlerted[entry.pattern] or 0)>8 then
-                            imageEntityAlerted[entry.pattern]=now
-                            showAlert(entry.label, dist, entry.color)
-                            notify("⚠ "..entry.label.."  "..math.floor(dist).." studs", entry.color)
-                        end
+            if entry and data.pp then
+                local dist=(selfPos-data.pp.Position).Magnitude
+                if dist<nearestDist then nearestDist=dist; nearestEntry=entry end
+                if dist<=ALERT_RANGE then
+                    local now=tick()
+                    if now-(imageEntityAlerted[entry.pattern] or 0)>8 then
+                        imageEntityAlerted[entry.pattern]=now
+                        showAlert(entry.label,dist,entry.color)
+                        notify("⚠ "..entry.label.."  "..math.floor(dist).." studs",entry.color)
                     end
                 end
             end
@@ -1543,44 +1912,30 @@ task.spawn(function()
         if nearestEntry then
             ivImgEnt.Text=nearestEntry.label.."  "..math.floor(nearestDist).." st"
             ivImgEnt.TextColor3=nearestDist<=ALERT_RANGE and W.danger or W.warn
-        else
-            ivImgEnt.Text="none detected"; ivImgEnt.TextColor3=W.txtSec
-        end
+        else ivImgEnt.Text="none detected"; ivImgEnt.TextColor3=W.txtSec end
     end
 end)
 
--- ================================================================
---  PLAYER ESP
--- ================================================================
 task.spawn(function()
     while task.wait(0.8) do
         if not F.PlayerESP then continue end
         for _,p in ipairs(PLR:GetPlayers()) do
             if p~=LP and p.Character then
                 if not p.Character:FindFirstChild("P_ESP") then
-                    local h=Instance.new("Highlight",p.Character)
-                    h.Name="P_ESP"; h.FillColor=Color3.fromRGB(0,188,88)
-                    h.OutlineColor=Color3.fromRGB(0,244,118); h.FillTransparency=0.38
+                    local h=Instance.new("Highlight",p.Character); h.Name="P_ESP"
+                    h.FillColor=Color3.fromRGB(0,188,88); h.OutlineColor=Color3.fromRGB(0,244,118); h.FillTransparency=0.38
                     task.spawn(function()
                         while p.Character and p.Character:FindFirstChild("P_ESP") and F.PlayerESP do task.wait(0.8) end
-                        pcall(function()
-                            if p.Character then
-                                local e=p.Character:FindFirstChild("P_ESP"); if e then e:Destroy() end
-                                local b=p.Character:FindFirstChild("P_BILL"); if b then b:Destroy() end
-                            end
-                        end)
+                        pcall(function() if p.Character then local e=p.Character:FindFirstChild("P_ESP"); if e then e:Destroy() end local b=p.Character:FindFirstChild("P_BILL"); if b then b:Destroy() end end end)
                     end)
                 end
                 if not p.Character:FindFirstChild("P_BILL") then
                     local rp=p.Character:FindFirstChild("HumanoidRootPart")
                     if rp then
-                        local bg=Instance.new("BillboardGui",p.Character)
-                        bg.Name="P_BILL"; bg.AlwaysOnTop=true
+                        local bg=Instance.new("BillboardGui",p.Character); bg.Name="P_BILL"; bg.AlwaysOnTop=true
                         bg.Size=UDim2.new(0,128,0,38); bg.StudsOffset=Vector3.new(0,3,0); bg.Adornee=rp
-                        local tl=Instance.new("TextLabel",bg)
-                        tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
-                        tl.TextColor3=Color3.fromRGB(48,218,108)
-                        tl.Font=Enum.Font.GothamBold; tl.TextSize=10
+                        local tl=Instance.new("TextLabel",bg); tl.BackgroundTransparency=1; tl.Size=UDim2.new(1,0,1,0)
+                        tl.TextColor3=Color3.fromRGB(48,218,108); tl.Font=Enum.Font.GothamBold; tl.TextSize=10
                         tl.TextStrokeTransparency=0.15; tl.RichText=true
                         task.spawn(function()
                             while p.Character and p.Character:FindFirstChild("P_BILL") and F.PlayerESP do
@@ -1588,10 +1943,7 @@ task.spawn(function()
                                 if hrp and p.Character then
                                     local ph=p.Character:FindFirstChild("HumanoidRootPart")
                                     local ph2=p.Character:FindFirstChildOfClass("Humanoid")
-                                    if ph and ph2 then
-                                        local dist=math.floor((hrp.Position-ph.Position).Magnitude)
-                                        tl.Text="<b>"..p.Name.."</b>\n<font size=\"10\">"..dist.." st  ·  "..math.floor(ph2.Health).." HP</font>"
-                                    end
+                                    if ph and ph2 then tl.Text="<b>"..p.Name.."</b>\n<font size=\"10\">"..math.floor((hrp.Position-ph.Position).Magnitude).." st  ·  "..math.floor(ph2.Health).." HP</font>" end
                                 end
                                 task.wait(0.3)
                             end
@@ -1604,49 +1956,29 @@ task.spawn(function()
     end
 end)
 
--- ================================================================
---  SCRAP ESP
--- ================================================================
 task.spawn(function()
     while task.wait(1.2) do
-        if not F.ScrapESP then continue end
-        for obj in pairs(scrapCache) do
-            if obj.Parent and not obj:FindFirstChild("ScrapTag") then
-                local h=Instance.new("Highlight",obj)
-                h.Name="ScrapTag"; h.FillColor=Color3.fromRGB(208,128,0)
-                h.OutlineColor=Color3.fromRGB(255,192,44); h.FillTransparency=0.45
-                task.spawn(function()
-                    while obj.Parent~=nil and F.ScrapESP do task.wait(1) end
-                    pcall(function() h:Destroy() end)
-                end)
+        if F.ScrapESP then
+            for obj in pairs(scrapCache) do
+                if obj.Parent and not obj:FindFirstChild("ScrapTag") then
+                    local h=Instance.new("Highlight",obj); h.Name="ScrapTag"
+                    h.FillColor=Color3.fromRGB(208,128,0); h.OutlineColor=Color3.fromRGB(255,192,44); h.FillTransparency=0.45
+                    task.spawn(function() while obj.Parent~=nil and F.ScrapESP do task.wait(1) end; pcall(function() h:Destroy() end) end)
+                end
+            end
+        end
+        if F.CorpseESP then
+            for obj in pairs(corpseCache) do
+                if obj.Parent and not obj:FindFirstChild("CorpseHL") then
+                    local h=Instance.new("Highlight",obj); h.Name="CorpseHL"
+                    h.FillColor=Color3.fromRGB(192,18,18); h.OutlineColor=Color3.fromRGB(255,72,72); h.FillTransparency=0.5
+                    task.spawn(function() while obj.Parent~=nil and F.CorpseESP do task.wait(1) end; pcall(function() h:Destroy() end) end)
+                end
             end
         end
     end
 end)
 
--- ================================================================
---  CORPSE ESP
--- ================================================================
-task.spawn(function()
-    while task.wait(1.2) do
-        if not F.CorpseESP then continue end
-        for obj in pairs(corpseCache) do
-            if obj.Parent and not obj:FindFirstChild("CorpseHL") then
-                local h=Instance.new("Highlight",obj)
-                h.Name="CorpseHL"; h.FillColor=Color3.fromRGB(192,18,18)
-                h.OutlineColor=Color3.fromRGB(255,72,72); h.FillTransparency=0.5
-                task.spawn(function()
-                    while obj.Parent~=nil and F.CorpseESP do task.wait(1) end
-                    pcall(function() h:Destroy() end)
-                end)
-            end
-        end
-    end
-end)
-
--- ================================================================
---  LIGHTING
--- ================================================================
 task.spawn(function()
     while task.wait(0.5) do
         if F.FullBright then
@@ -1656,23 +1988,13 @@ task.spawn(function()
     end
 end)
 
--- ================================================================
---  MOVEMENT  (Noclip)
--- ================================================================
 RS.Stepped:Connect(function()
     if not F.Noclip then return end
     local c=getChar(); if not c then return end
     for _,p in ipairs(c:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end
 end)
 
--- ================================================================
---  SPEED ENFORCER
--- ================================================================
-task.spawn(function()
-    while task.wait(0.5) do
-        if F.SpeedMult>1 then applySpeed() end
-    end
-end)
+task.spawn(function() while task.wait(0.5) do if F.SpeedMult>1 then applySpeed() end end end)
 
 LP.CharacterAdded:Connect(function(char)
     task.wait(0.5)
@@ -1682,14 +2004,10 @@ LP.CharacterAdded:Connect(function(char)
     if pfActive then stopPathfinding("respawned") end
 end)
 
--- ================================================================
---  HP MONITOR + AUTO SAFE SPAWN
--- ================================================================
 task.spawn(function()
     while task.wait(0.15) do
         local hum=getHum(); if not hum then continue end
-        local hp=math.floor(hum.Health)
-        local maxHP=math.max(math.floor(hum.MaxHealth),1)
+        local hp=math.floor(hum.Health); local maxHP=math.max(math.floor(hum.MaxHealth),1)
         local pct=math.clamp(hp/maxHP,0,1)
         HPLbl.Text="HP  "..hp.." / "..maxHP
         local col=pct>0.6 and W.success or pct>0.3 and W.warn or W.danger
@@ -1705,49 +2023,33 @@ task.spawn(function()
     end
 end)
 
--- ================================================================
---  MAP INFO + UTILS STATS
--- ================================================================
 task.spawn(function()
     while task.wait(1) do
         local map=getCurrentMap()
         if map then
             local name=map.Name; ivMap.Text=name; ivMap2.Text=name
             local sf=map:FindFirstChild("Spawns")
-            if not sf then
-                for _,d in ipairs(map:GetDescendants()) do
-                    if (d:IsA("Folder") or d:IsA("Model")) and d.Name:lower()=="spawns" then sf=d; break end
-                end
-            end
+            if not sf then for _,d in ipairs(map:GetDescendants()) do if (d:IsA("Folder") or d:IsA("Model")) and d.Name:lower()=="spawns" then sf=d; break end end end
             if sf then
-                local cnt=0
-                for _,s in ipairs(sf:GetChildren()) do if s:IsA("BasePart") or s:IsA("SpawnLocation") then cnt+=1 end end
+                local cnt=0; for _,s in ipairs(sf:GetChildren()) do if s:IsA("BasePart") or s:IsA("SpawnLocation") then cnt+=1 end end
                 ivSpawns.Text=tostring(cnt); ivSpawnC.Text=tostring(cnt); ivSpawnP.Text=sf:GetFullName()
             else ivSpawns.Text="0"; ivSpawnC.Text="0"; ivSpawnP.Text="not found" end
-        else
-            ivMap.Text="none"; ivMap2.Text="none"
-            ivSpawns.Text="—"; ivSpawnC.Text="—"; ivSpawnP.Text="—"
-        end
+        else ivMap.Text="none"; ivMap2.Text="none"; ivSpawns.Text="—"; ivSpawnC.Text="—"; ivSpawnP.Text="—" end
     end
 end)
 
--- ================================================================
---  FLOATING TOGGLE BUTTON
--- ================================================================
 local Tog=Instance.new("TextButton",SG)
-Tog.Size=UDim2.new(0,38,0,38); Tog.Position=UDim2.new(0,10,0.5,0)
+Tog.Size=UDim2.new(0,sp(38),0,sp(38)); Tog.Position=UDim2.new(0,10,0.5,0)
 Tog.BackgroundColor3=W.surface; Tog.Text="UH"
 Tog.TextColor3=W.accent; Tog.Font=Enum.Font.GothamBlack
-Tog.TextSize=10; Tog.AutoButtonColor=false; Tog.BorderSizePixel=0
+Tog.TextSize=IS_MOBILE and 9 or 10; Tog.AutoButtonColor=false; Tog.BorderSizePixel=0
 Instance.new("UICorner",Tog).CornerRadius=UDim.new(0,9)
 local togS=Instance.new("UIStroke",Tog); togS.Color=W.sep; togS.Thickness=1
 Tog.MouseEnter:Connect(function() tw(togS,0.1,{Color=W.accent}) end)
 Tog.MouseLeave:Connect(function() tw(togS,0.1,{Color=W.sep}) end)
 Tog.MouseButton1Click:Connect(function() Main.Visible=not Main.Visible end)
 
--- ================================================================
---  STARTUP
--- ================================================================
 task.delay(0.5,function()
-    notify("Unit Hub v5.6 loaded  ·  "..LP.Name..(isOwner() and "  👑" or ""))
+    notify("Unit Hub v5.7 loaded  ·  "..LP.Name..(isOwner() and "  👑" or ""))
+    if IS_MOBILE then notify("Mobile mode  ·  scaled to "..math.floor(SCALE*100).."%", W.teal) end
 end)
